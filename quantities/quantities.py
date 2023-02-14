@@ -156,6 +156,10 @@ class SimulationAnalysis:
         bin_energies = np.loadtxt(os.path.join(self.grid_path, self.nu_e_grid))
         return bin_energies[:,2]
     
+    def neutrino_dE(self):
+        bin_energies = np.loadtxt(os.path.join(self.grid_path, self.nu_e_grid))
+        return bin_energies[:,3] - bin_energies[:,1]
+
     def neutrino_flux(self, data_h5):
         """
         Last index is the neutrino flavour: nue, nua, nux.
