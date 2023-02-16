@@ -15,20 +15,21 @@ def load_file(path_folder, file_name):
     try:
         data = np.loadtxt(path)
     except:
-        col_number = int(np.loadtxt(path.replace('.dat', '.txt'), skiprows=1) + 2)
-        data = np.loadtxt(path, usecols=tuple(range(col_number)))
-    else:
-        head = list(np.genfromtxt(path.replace('.dat', '.txt'), dtype=str,
-                                  delimiter=',', skip_footer=1))
-        data_str = pd.read_table(path, dtype=str, sep='\s+', names=head)
-        data_str = data_str.fillna('0')
-        data_str = data_str.to_numpy()
-        index_list = []
-        for i in range(data_str.shape[0]):
-            try:
-                data_str[i,:].astype('float')
-            except:
-                index_list.append(i)
-        data_str = np.delete(data_str, index_list,0)
-        data = data_str.astype('float')
+        try:
+            col_number = int(np.loadtxt(path.replace('.dat', '.txt'), skiprows=1) + 2)
+            data = np.loadtxt(path, usecols=tuple(range(col_number)))
+        except:
+            head = list(np.genfromtxt(path.replace('.dat', '.txt'), dtype=str,
+                                    delimiter=',', skip_footer=1))
+            data_str = pd.read_table(path, dtype=str, sep='\s+', names=head)
+            data_str = data_str.fillna('0')
+            data_str = data_str.to_numpy()
+            index_list = []
+            for i in range(data_str.shape[0]):
+                try:
+                    data_str[i,:].astype('float')
+                except:
+                    index_list.append(i)
+            data_str = np.delete(data_str, index_list,0)
+            data = data_str.astype('float')
     return data
