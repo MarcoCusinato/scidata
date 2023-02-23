@@ -1,4 +1,6 @@
 import os
+import f90nml
+
 def get_indices_from_parfile(file_name, path_folder):
     """
     Reads the simulation parfile and return a dictionary with the indices
@@ -18,87 +20,80 @@ def get_indices_from_parfile(file_name, path_folder):
             ------------------------------------------------------------
                                        THD
     """
-    f = open(os.path.join(path_folder, file_name), 'r')
-    Lines = [line for line in f.readlines() if line.strip()]
-    f.close()
+    namelist = f90nml.read(os.path.join(path_folder, file_name))
     indices = {'hydro':{}, 'thd':{}}
-    for li in Lines:
-        li.replace(",", "")
-        words = li.split()
-        if words[0] == 'I_RH':
-            indices['hydro']['I_RH'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_EN':
-            indices['hydro']['I_EN'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_VX':
-            indices['hydro']['I_VX'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_VY':
-            indices['hydro']['I_VY'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_VZ':
-            indices['hydro']['I_VZ'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_YE':
-            indices['hydro']['I_YE'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_YZ':
-            indices['hydro']['I_YZ'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_LRTZ':
-            indices['thd']['I_LRTZ'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_DENS':
-            indices['thd']['I_DENS'] = int(words[2].replace(",", "")) - 1    
-        if words[0] == 'I_EINT':
-            indices['thd']['I_EINT'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_ENTH':
-            indices['thd']['I_ENTH'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_PELE':
-            indices['thd']['I_PELE'] = int(words[2].replace(",", "")) - 1    
-        if words[0] == 'I_TELE':
-            indices['thd']['I_TELE'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_NELE':
-            indices['thd']['I_NELE'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_PION':
-            indices['thd']['I_PION'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_TION':
-            indices['thd']['I_TION'] = int(words[2].replace(",", "")) - 1    
-        if words[0] == 'I_NION':
-            indices['thd']['I_NION'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_VELX':
-            indices['thd']['I_VELX'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_VELY':
-            indices['thd']['I_VELY'] = int(words[2].replace(",", "")) - 1    
-        if words[0] == 'I_VELZ':
-            indices['thd']['I_VELZ'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_TMPR':
-            indices['thd']['I_TMPR'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_ENTR':
-            indices['thd']['I_ENTR'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_GAMM':
-            indices['thd']['I_GAMM'] = int(words[2].replace(",", "")) - 1    
-        if words[0] == 'I_HEAT':
-            indices['thd']['I_HEAT'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_DELP':
-            indices['thd']['I_DELP'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_SMOMX':
-            indices['thd']['I_SMOMX'] = int(words[2].replace(",", "")) - 1    
-        if words[0] == 'I_SMOMY':
-            indices['thd']['I_SMOMY'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_SMOMZ':
-            indices['thd']['I_SMOMZ'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_PGAS':
-            indices['thd']['I_PGAS'] = int(words[2].replace(",", "")) - 1
-        if words[0] == 'I_CSND':
-            indices['thd']['I_CSND'] = int(words[2].replace(",", "")) - 1    
-        if words[0] == 'I_COMP':
-            list_comp_ind = []
-            for i in range(2,len(words)):
-                list_comp_ind.append(int(words[i].replace(",", "")) - 1)
-            indices['thd']['I_COMP'] = list_comp_ind
-        if words[0] == 'I_CPOT':
-            list_cpot_ind = []
-            for i in range(2,len(words)):
-                list_cpot_ind.append(int(words[i].replace(",", "")) - 1)
-            indices['thd']['I_CPOT'] = list_cpot_ind
-        if words[0] == 'I_BHEX':
-            indices['thd']['I_BHEX'] = int(words[2].replace(",", "")) - 1    
-        if words[0] == 'STENCIL':
-           STENCIL =  int(words[2].replace(",", ""))
+    if 'I_RH'in namelist["IINDICES"]:
+        indices['hydro']['I_RH'] = namelist["IINDICES"]["I_RH"] - 1
+    if 'I_EN'in namelist["IINDICES"]:
+        indices['hydro']['I_EN'] = namelist["IINDICES"]["I_EN"] - 1
+    if 'I_VX'in namelist["IINDICES"]:
+        indices['hydro']['I_VX'] = namelist["IINDICES"]["I_VX"] - 1
+    if 'I_VY'in namelist["IINDICES"]:
+        indices['hydro']['I_VY'] = namelist["IINDICES"]["I_VY"] - 1
+    if 'I_VZ'in namelist["IINDICES"]:
+        indices['hydro']['I_VZ'] = namelist["IINDICES"]["I_VZ"] - 1
+    if 'I_YE'in namelist["IINDICES"]:
+        indices['hydro']['I_YE'] = namelist["IINDICES"]["I_YE"] - 1
+    if 'I_YZ'in namelist["IINDICES"]:
+        indices['hydro']['I_YZ'] = namelist["IINDICES"]["I_YZ"] - 1
+    if 'I_LRTZ'in namelist["IINDICES"]:
+        indices['thd']['I_LRTZ'] = namelist["IINDICES"]["I_LRTZ"] - 1
+    if 'I_DENS'in namelist["IINDICES"]:
+        indices['thd']['I_DENS'] = namelist["IINDICES"]["I_DENS"] - 1    
+    if 'I_EINT'in namelist["IINDICES"]:
+        indices['thd']['I_EINT'] = namelist["IINDICES"]["I_EINT"] - 1
+    if 'I_ENTH'in namelist["IINDICES"]:
+        indices['thd']['I_ENTH'] = namelist["IINDICES"]["I_ENTH"] - 1
+    if 'I_PELE'in namelist["IINDICES"]:
+        indices['thd']['I_PELE'] = namelist["IINDICES"]["I_PELE"] - 1    
+    if 'I_TELE'in namelist["IINDICES"]:
+        indices['thd']['I_TELE'] = namelist["IINDICES"]["I_TELE"] - 1
+    if 'I_NELE'in namelist["IINDICES"]:
+        indices['thd']['I_NELE'] = namelist["IINDICES"]["I_NELE"] - 1
+    if 'I_PION'in namelist["IINDICES"]:
+        indices['thd']['I_PION'] = namelist["IINDICES"]["I_PION"] - 1
+    if 'I_TION'in namelist["IINDICES"]:
+        indices['thd']['I_TION'] = namelist["IINDICES"]["I_TION"] - 1    
+    if 'I_NION'in namelist["IINDICES"]:
+        indices['thd']['I_NION'] = namelist["IINDICES"]["I_NION"] - 1
+    if 'I_VELX'in namelist["IINDICES"]:
+        indices['thd']['I_VELX'] = namelist["IINDICES"]["I_VELX"] - 1
+    if 'I_VELY'in namelist["IINDICES"]:
+        indices['thd']['I_VELY'] = namelist["IINDICES"]["I_VELY"] - 1    
+    if 'I_VELZ'in namelist["IINDICES"]:
+        indices['thd']['I_VELZ'] = namelist["IINDICES"]["I_VELZ"] - 1
+    if 'I_TMPR'in namelist["IINDICES"]:
+        indices['thd']['I_TMPR'] = namelist["IINDICES"]["I_TMPR"] - 1
+    if 'I_ENTR'in namelist["IINDICES"]:
+        indices['thd']['I_ENTR'] = namelist["IINDICES"]["I_ENTR"] - 1
+    if 'I_GAMM'in namelist["IINDICES"]:
+        indices['thd']['I_GAMM'] = namelist["IINDICES"]["I_GAMM"] - 1    
+    if 'I_HEAT'in namelist["IINDICES"]:
+        indices['thd']['I_HEAT'] = namelist["IINDICES"]["I_HEAT"] - 1
+    if 'I_DELP'in namelist["IINDICES"]:
+        indices['thd']['I_DELP'] = namelist["IINDICES"]["I_DELP"] - 1
+    if 'I_SMOMX'in namelist["IINDICES"]:
+        indices['thd']['I_SMOMX'] = namelist["IINDICES"]["I_SMOMX"] - 1    
+    if 'I_SMOMY'in namelist["IINDICES"]:
+        indices['thd']['I_SMOMY'] = namelist["IINDICES"]["I_SMOMY"] - 1
+    if 'I_SMOMZ'in namelist["IINDICES"]:
+        indices['thd']['I_SMOMZ'] = namelist["IINDICES"]["I_SMOMZ"] - 1
+    if 'I_PGAS'in namelist["IINDICES"]:
+        indices['thd']['I_PGAS'] = namelist["IINDICES"]["I_PGAS"] - 1
+    if 'I_CSND'in namelist["IINDICES"]:
+        indices['thd']['I_CSND'] = namelist["IINDICES"]["I_CSND"] - 1    
+    if 'I_COMP'in namelist["IINDICES"]:
+        list_comp_ind = namelist["IINDICES"]["I_COMP"]
+        list_comp_ind = [x -1 for x in list_comp_ind]
+        indices['thd']['I_COMP'] = list_comp_ind
+    if 'I_CPOT'in namelist["IINDICES"]:
+        list_cpot_ind = namelist["IINDICES"]["I_COMP"]
+        list_cpot_ind = [x -1 for x in list_comp_ind]
+        indices['thd']['I_CPOT'] = list_cpot_ind
+    if 'I_BHEX'in namelist["IINDICES"]:
+        indices['thd']['I_BHEX'] = namelist["IINDICES"]["I_BHEX"] - 1    
+    if 'STENCIL'in namelist["GRIDPARS"]:
+        STENCIL =  namelist["GRIDPARS"]["STENCIL"]
     for  k1 in indices['hydro']:
         if type(indices['hydro'][k1]) == list:
             for i in range(0,len(indices['hydro'][k1])):
@@ -114,4 +109,3 @@ def get_indices_from_parfile(file_name, path_folder):
         elif indices['thd'][k1] < 0:
             indices['thd'][k1] = None
     return indices, STENCIL
-
