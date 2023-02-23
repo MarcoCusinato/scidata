@@ -13,6 +13,7 @@ This being a `Python` package, it requires a version of [Python3](https://www.py
  - [SciPy](https://scipy.org/)
  - [h5Py](https://www.h5py.org/)
  - [Pandas](https://pandas.pydata.org/docs/index.html)
+ - [f90nml](https://pypi.org/project/f90nml/)
 
 To install their latest version just run
 ```
