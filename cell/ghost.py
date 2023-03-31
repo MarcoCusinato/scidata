@@ -125,9 +125,12 @@ class ghost:
 
     def remove_ghost_cells_radii(self, array, dim, **kwargs):
         assert dim in (1, 2, 3), "Simulation MUST be 1, 2 or 3D"
+        
         if kwargs:
             self.update_ghost_cells(**kwargs)
-            if dim == 2:
+            if dim == 1:
+                pass
+            elif dim == 2:
                 array = self.__remove_2D_ghost_cells_radii(array)
             else:
                 array = self.__remove_3D_ghost_cells_radii(array)
