@@ -184,7 +184,7 @@ def find_simulation(folder, platform, sim_path=None):
     if sim_path is not None:
         path = os.path.join(sim_path, folder)
         if not os.path.exists(path):
-            raise TypeError("Requested simulation does not exist in the supplied path.")
+            raise TypeError("Requested simulation (" + folder + ") does not exist in the supplied path.")
         return os.path.join(sim_path, folder)
     
     simDict = get_paths_dictionary()
@@ -198,7 +198,7 @@ def find_simulation(folder, platform, sim_path=None):
         mask[2] = True
     sim_number = sum(mask)
     if sim_number == 0:
-        msg = "Requested simulation is not in the search paths. " +\
+        msg = "Requested simulation (" + folder + ") is not in the search paths. " +\
               "Please supply also a simulation path or update your search paths."
         raise TypeError(msg)
     simDict = list(simDict.values())
@@ -206,14 +206,15 @@ def find_simulation(folder, platform, sim_path=None):
         import numpy as np
         simDict = np.array(simDict)
         p = simDict[mask][0][folder]
-        print("Your simulation is in ", p)
+        print("Your simulation (" + folder + ") is in ", p)
         msg = "If this is not the path you have chosen, " +\
               "please turn to the dark side (supply a simulation path)."
         print(msg)
         return return_real_path(folder, p, platform)
     else:
         import numpy as np
-        msg = "There are " + str(sim_number + 1) + " with the requested name. " +\
+        msg = "There are " + str(sim_number) + " simulations with the requested name (" + \
+               folder + "). " + \
               "The simulations are in " + str(np.array(sim_possibilities)[mask]) + "."
         print(msg)
         choice = None
@@ -222,7 +223,7 @@ def find_simulation(folder, platform, sim_path=None):
             choice = input(msg)
         p = return_real_path(folder, simDict[sim_possibilities.index(choice)][folder],
                              platform)
-        print("Your simulation is in ", p)
+        print("Your simulation (" + folder + ") is in ", p)
         msg = "If this is not the path you have chosen, " +\
               "please turn to the dark side (supply a simulation path)."
         print(msg)
@@ -240,6 +241,7 @@ def clear_folder(folder_path):
                 os.rmdir(path)
         except:
             continue
+
 def clear_simulation_folder(folder_list):
     """
     Deletes all empty folders in a list of simulations.
