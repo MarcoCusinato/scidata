@@ -87,8 +87,8 @@ def get_indices_from_parfile(file_name, path_folder):
         list_comp_ind = [x -1 for x in list_comp_ind]
         indices['thd']['I_COMP'] = list_comp_ind
     if 'I_CPOT'in namelist["IINDICES"]:
-        list_cpot_ind = namelist["IINDICES"]["I_COMP"]
-        list_cpot_ind = [x -1 for x in list_comp_ind]
+        list_cpot_ind = namelist["IINDICES"]["I_CPOT"]
+        list_cpot_ind = [x -1 for x in list_cpot_ind]
         indices['thd']['I_CPOT'] = list_cpot_ind
     if 'I_BHEX'in namelist["IINDICES"]:
         indices['thd']['I_BHEX'] = namelist["IINDICES"]["I_BHEX"] - 1    
