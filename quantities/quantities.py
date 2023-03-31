@@ -25,6 +25,7 @@ from scidata.par.read_parfile import get_indices_from_parfile as getPar
 from scidata.paths.existence import check_path
 from scidata.paths.path_managment import find_simulation
 from scidata.platform.platform import local_storage_folder, pltf
+from scidata.GWs_strain.GWs import GW_strain
 
 u = units()
 
@@ -129,12 +130,41 @@ class SimulationAnalysis:
 
     def chemical_potential_neutrinos(self, data_h5):
         data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_CPOT'][3]]
+        print(self.hydroTHD_index['thd']['I_CPOT'][3])
+        return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
+
+    def neutron_fraction(self, data_h5):
+        data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_COMP'][0]]
         return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
     
+    def proton_fraction(self, data_h5):
+        data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_COMP'][1]]
+        return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
+    
+    def alpha_fraction(self, data_h5):
+        data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_COMP'][2]]
+        return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
+    
+    def heavy_nuclei_fraction(self, data_h5):
+        data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_COMP'][3]]
+        return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
+    
+    def heavy_nuclei_average_mass(self, data_h5):
+        data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_COMP'][4]]
+        return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
+    
+    def heavy_nuclei_average_proton_number(self, data_h5):
+        data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_COMP'][5]]
+        return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
+
     def eta_electrons(self, data_h5):
         chem_pot = self.chemical_potential_electrons(data_h5)
         temp = self.temperature(data_h5)
         return chem_pot/temp
+    
+    def adiabatic_index(self, data_h5):
+        data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_GAMM']]
+        return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
     
     def eta_neutrons(self, data_h5):
         chem_pot = self.chemical_potential_neutrons(data_h5)
@@ -292,28 +322,52 @@ class SimulationAnalysis:
     #GWs
     def GW_Amplitudes(self, correct_for_tob=True):
         """
-        GWs amplitudes calculated as the first partial time derivative
-        of NE_220 and not with the second partial time derivative of ME_220.
-        Moreover we only consider matter contribution to the amplitude, being
-        the main contribution to it.
+        Returns GWs amplitudes:
+        1D:
+            No GWs in spherical symmetry
+        2D:
+            Column 1: time
+            Column 2: + ploarization
+        3D:
+            Column 1: time
+            Column 2: + polarization equatorial plane
+            Column 3: + polarization polar plane
+            Column 4: x polarization equatorial plane
+            Column 5: x polarization polar plane
         """
         data = load_file(self.log_path, self.grw)
-        const = -np.sqrt(15/np.pi)
         if correct_for_tob:
             data[:,2] -= self.time_of_bounce_rho()
-        return np.stack((data[:, 2],
-                         const * IDL_derivative(data[:,2], data[:,5])),
-                         axis = 1)
+        return GW_strain(self.dim, data)
     
-    def GW_dimensionless_strain(self, distance, angle, correct_for_tob=True):
+    def GW_dimensionless_strain(self, distance, angle = 0.5 * np.pi, correct_for_tob=True):
+        """
+        Returns GWs amplitudes:
+        1D:
+            No GWs in spherical symmetry
+        2D:
+            Column 1: time
+            Column 2: + ploarization
+        3D:
+            Column 1: time
+            Column 2: + polarization equatorial plane
+            Column 3: + polarization polar plane
+            Column 4: x polarization equatorial plane
+            Column 5: x polarization polar plane
+        """
         data = self.GW_Amplitudes(correct_for_tob)
+        if self.dim == 1:
+            return data
         const = np.sqrt(np.pi/15)*np.sin(angle)**2/distance
-        data[:,1] *= const
+        data[:, 1:] *= const
         return data
     
     #misc from h5 file: grav pot, time
     def grav_pot(self, data_h5):
-        return self.ghost.remove_ghost_cells(np.squeeze(np.array(data_h5['gravpot']['data'])), self.dim)
+        data = np.array(data_h5['gravpot']['data'])
+        if data.ndim == 4:
+            data = data[..., 0]
+        return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
 
     def time(self, data_h5, correct_for_tob=False):
         if correct_for_tob:
@@ -380,7 +434,7 @@ class SimulationAnalysis:
         If we do not reach that density we lower the threshold to 2
         """
         rho_data = self.rho_max(False)
-        rho_index = np.argmax(rho_data[:,1]>2.5e14)
+        rho_index = np.argmax(rho_data[:,1]>2e14)
         if rho_index == 0 or rho_data[rho_index, 0] >= 0.6:
             rho_index = np.argmax(rho_data[:,1]>2e14)
         return rho_data[rho_index, 0]
@@ -463,6 +517,17 @@ class SimulationAnalysis:
             rho[:,2] -= self.time_of_bounce_rho()
         return np.stack((rho[:, 2], rho[:, 3]), axis = 1)
     
+    def tot_mass(self, correct_for_tob=True):
+        """
+        indices
+        1: time
+        2: total mass
+        """
+        rho = load_file(self.log_path, self.rho_max_file)
+        if correct_for_tob:
+            rho[:,2] -= self.time_of_bounce_rho()
+        return np.stack((rho[:, 2], u.convert_to_solar_masses(rho[:, 4])), axis = 1)
+
     def Yl_cent(self, correcetd_by_tob = True):
         """
         indices
@@ -591,6 +656,11 @@ class SimulationAnalysis:
         radius = np.flip(self.cell.radius(self.ghost))
         if type(ind) == int:
             ind = np.zeros()
+        #deallocate arrays
+        del neutrino_fluxes
+        del neutrino_opacities
+        del dr
+        del neutrino_data
         return radius[ind]
     
     def neutrino_sphere_radius(self, tob_correction, save_name = 'neutrino_spheres_radius', **kwargs):
@@ -681,41 +751,45 @@ class SimulationAnalysis:
         vel_tresh = -3e9
         entr_tresh = 6
         entr_der_tresh = -0.3
-        
-        ind = np.argmax((velocity_derivative <= vel_der_tresh) & (entropy_derivative <= entr_der_tresh) & \
-                        (velocity >= vel_tresh) & (entropy >= entr_tresh), axis = -1)
-        r = self.cell.radius(self.ghost)
-        ind2 = velocity.shape[-1] - 1 - np.argmax((np.flip(velocity, axis = -1) <= vel_tresh) & \
+        if self.dim == 1:
+            ind = velocity.shape[-1] - 1 - np.argmax((np.flip(velocity, axis = -1) <= vel_tresh) & \
                                         (np.flip(entropy, axis = -1) <= entr_tresh), axis = -1)
-        oob = ind2 ==  velocity.shape[-1] - 1
-        if any(oob):
-            ind2 = np.where(oob, ind, ind2)
-        oob = ind == 0
-        if any(oob) and self.dim > 1:
-            ind = np.where(oob, ind2, ind)
-        shock = np.flip(r)[ind]
-        mean_ind = shock != r[-1]
-        oob = shock >= (shock.mean(where = mean_ind) + 1.5 * np.std(shock, where = mean_ind))
-        if any(oob) and self.dim > 1:
-            shock2 = np.flip(r)[ind2]
-            shock = np.where(oob, shock2, shock)
+            shock = np.flip(r)[ind]
+        else:
+            ind = np.argmax((velocity_derivative <= vel_der_tresh) & (entropy_derivative <= entr_der_tresh) & \
+                        (velocity >= vel_tresh) & (entropy >= entr_tresh), axis = -1)
+            r = self.cell.radius(self.ghost)
+            ind2 = velocity.shape[-1] - 1 - np.argmax((np.flip(velocity, axis = -1) <= vel_tresh) & \
+                                            (np.flip(entropy, axis = -1) <= entr_tresh), axis = -1)
+            oob = ind2 ==  velocity.shape[-1] - 1
+            if oob.any():
+                ind2 = np.where(oob, ind, ind2)
+            oob = ind == 0
+            if oob.any():
+                ind = np.where(oob, ind2, ind)
+            shock = np.flip(r)[ind]
             mean_ind = shock != r[-1]
-        sh = shock.mean(where = mean_ind)
-        sh_std = np.std(shock, where = mean_ind)
-        k = 1.5
-        out_value = sh - k * sh_std
-        while (out_value <= 0 and k > 0):
+            oob = shock >= (shock.mean(where = mean_ind) + 1.5 * np.std(shock, where = mean_ind))
+            if oob.any():
+                shock2 = np.flip(r)[ind2]
+                shock = np.where(oob, shock2, shock)
+                mean_ind = shock != r[-1]
+            sh = shock.mean(where = mean_ind)
+            sh_std = np.std(shock, where = mean_ind)
+            k = 1.5
             out_value = sh - k * sh_std
-            k -= 0.5
-        oob = shock < (out_value)
-        if any(oob) and self.dim == 2:
-            theta = self.cell.theta(self.ghost)
-            ind_to_interp = np.invert(oob)
-            f = interp1d(theta[ind_to_interp], shock[ind_to_interp], kind = 'linear', fill_value="extrapolate")
-            shock2 = f(theta)
-            shock = np.where((oob) & (shock2 > 0), shock2, shock)
-        if any(shock < 0):
-            raise TypeError("Shock radius is negative!!!!!!")
+            while (out_value <= 0 and k > 0):
+                out_value = sh - k * sh_std
+                k -= 0.5
+            oob = shock < (out_value)
+            if oob.any() and self.dim == 2:
+                theta = self.cell.theta(self.ghost)
+                ind_to_interp = np.invert(oob)
+                f = interp1d(theta[ind_to_interp], shock[ind_to_interp], kind = 'linear', fill_value="extrapolate")
+                shock2 = f(theta)
+                shock = np.where((oob) & (shock2 > 0), shock2, shock)
+            if (shock < 0).any():
+                raise TypeError("Shock radius is negative!!!!!!")
         return shock
 
     def shock_radius(self, tob_correction, save_name = 'shock_radius', **kwargs):
@@ -752,28 +826,43 @@ class SimulationAnalysis:
         if radius_to_calculate == 'gain':
             PNS_radius = self.get_PNS_radius(PNS_radius = True)
         for (f, i) in zip(file_list, indices):
+            no_neutrino_error = False #in some simulations neutrino output is not saved 
+                                      #for all timesteps to save storage space
             data_h5 = self.open_h5(f)
             data[i, 0] = self.time(data_h5)
             if radius_to_calculate == 'gain':
                 radius_single = calculate_radius(data_h5, PNS_radius[..., i])
             elif radius_to_calculate == 'shock' and data[i, 0] <= tob:
                 radius_single = calculate_radius(data_h5, True)
+            elif radius_to_calculate == 'neutrino':
+                try:
+                    radius_single = calculate_radius(data_h5)
+                except:
+                    no_neutrino_error = True
             else:
                 radius_single = calculate_radius(data_h5)
+            
             if i == 0:
                 rad_out = radius_single[..., None]
             else:
+                if no_neutrino_error:
+                    if i == 0:
+                        raise ValueError("No neutrino saved in this simulation.")
+                    radius_single = rad_out[..., i-1]
                 rad_out = np.concatenate((rad_out, radius_single[..., None]),
-                                          axis = -1)
+                                        axis = -1)
             if radius_to_calculate == 'neutrino':
-                for nu in range(3):
-                    rr = radius_single[..., nu]
-                    data[i, 3 * nu + 1] = self.ghost.remove_ghost_cells_radii(rr,
-                                                                              self.dim).min()
-                    data[i, 3 * nu + 2] = self.ghost.remove_ghost_cells_radii(rr,
-                                                                              self.dim).max()
-                    data[i, 3 * nu + 3] = self.ghost.remove_ghost_cells_radii(rr,
-                                                                              self.dim).mean()
+                if no_neutrino_error:
+                    data[i, 1:] = data[i-1, 1:]
+                else:
+                    for nu in range(3):
+                        rr = radius_single[..., nu]
+                        data[i, 3 * nu + 1] = self.ghost.remove_ghost_cells_radii(rr,
+                                                                                self.dim).min()
+                        data[i, 3 * nu + 2] = self.ghost.remove_ghost_cells_radii(rr,
+                                                                                self.dim).max()
+                        data[i, 3 * nu + 3] = self.ghost.remove_ghost_cells_radii(rr,
+                                                                                self.dim).mean()
             else:
                 data[i, 1] = self.ghost.remove_ghost_cells_radii(radius_single, self.dim).min()
                 data[i, 2] = self.ghost.remove_ghost_cells_radii(radius_single, self.dim).max()
@@ -783,7 +872,7 @@ class SimulationAnalysis:
             data[:, 0] -= tob
         save_h5(save_path, rad_out, data,
                 indices, self.ghost.return_ghost_dictionary(), tob_correction)
-        #self.ghost.restore_default()
+        self.ghost.restore_default()
     
     def __get_radii(self, file, radius = False, indices = False, min_max_average = False,
                     ret_time = False,  ghost_cells = False, tob_corrected = False):
@@ -835,7 +924,7 @@ class SimulationAnalysis:
                         mass_accretion_500km = False, tob_corrected = True, name = 'mass_energy'):
         path = os.path.join(self.storage_path, name + '.h5')
         if not os.path.exists(path):
-            warnings.warn("Selected file does not exists. Creating one now.")
+            warnings.warn(name + " file does not exists. Creating one now.")
             self.__save_energies_and_masses(path, tob_corrected)
         data = self.open_h5(path)
         quantities_list = []
@@ -952,10 +1041,15 @@ class SimulationAnalysis:
             PNS = np.where(r <= self.ghost.remove_ghost_cells_radii(PNS_radius[..., index], 
                            self.dim, **ghost_cells)[..., None], 1, 0)
             rho = self.rho(data_h5) * PNS * dV
-            rot_energy = rho * self.phi_velocity(data_h5) ** 2
-            kin_energy = rho * (self.radial_velocity(data_h5) ** 2 \
-                         + self.theta_velocity(data_h5) ** 2)
-            mag_energy = self.magnetic_energy_per_unit_volume(data_h5) * PNS * dV
+            if self.dim > 1:
+                rot_energy = rho * self.phi_velocity(data_h5) ** 2
+                kin_energy = rho * (self.radial_velocity(data_h5) ** 2 \
+                            + self.theta_velocity(data_h5) ** 2)
+                mag_energy = self.magnetic_energy_per_unit_volume(data_h5) * PNS * dV
+            else:
+                rot_energy = np.zeros(rho.shape)
+                kin_energy = np.zeros(rho.shape)
+                mag_energy = np.zeros(rho.shape)
             data_out[index, 1] = rho.sum()
             data_out[index, 2] = kin_energy.sum()
             data_out[index, 3] = rot_energy.sum()
@@ -1117,7 +1211,7 @@ class SimulationAnalysis:
         assert order < 7, "Order of the polynomials mus be at most 6"
         path = os.path.join(self.storage_path, "GW_modes.h5")
         if not os.path.exists(path):
-            warnings.warn("Creatiing file...\nPlease wait.")
+            warnings.warn("Creating file...\nPlease wait.")
             self.__save_modes_GW(path, tob_corrected)
         data = h5py.File(path)
         time = np.array(data['dipole_modes']['time'])
@@ -1159,11 +1253,11 @@ class SimulationAnalysis:
         data_out[:, 0] = time
         dOmega = self.cell.dOmega(self.ghost)
         legp = LegP(np.cos(self.cell.theta(self.ghost)))
-        polynomial = getattr(legp, "P_" + str(order))
+        polynomial = getattr(legp, "P_" + str(order))()
         for i in indices:
             data_out[i, 1] = 0.5 * (self.ghost.remove_ghost_cells_radii(shock_radius[..., i], 
                                                                     self.dim, **ghost_cells) * \
-                             polynomial() * dOmega).sum()
+                             polynomial * dOmega).sum()
         return data_out
 
     def __fluid_trajectories(self):
