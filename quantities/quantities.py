@@ -108,8 +108,16 @@ class SimulationAnalysis:
             phi = np.cos(self.cell.phi(self.ghost))
             return v_phi / (phi[:, None, None] * theta[None, :, None] * radius[None, None, :])
 
+    def speed_of_sound(self, data_h5):
+        data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_CSND']]
+        return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
+    
     def entropy(self, data_h5):
         data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_ENTR']]
+        return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
+    
+    def internal_energy(self, data_h5):
+        data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_EINT']]
         return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
 
     def lorentz(self, data_h5):
@@ -362,12 +370,44 @@ class SimulationAnalysis:
         data[:, 1:] *= const
         return data
     
+    def Deltah(self, return_coordinates = False, correct_for_tob=True):
+        """
+        Returns the Delta h of the gravitational wave strain as defined in
+        Richers et al. 2017 (https://arxiv.org/pdf/1701.02752.pdf).
+        Basically the difference between the first maximum and minimum postbounce,
+        the first peak that appears is not considered.
+        """
+        GW_strain =self.GW_Amplitudes()[:, 0:2]
+        if self.dim == 1:
+            return None
+        bounce_index = np.argmax(GW_strain[:,0]>=0) - 5
+        index_5ms = np.argmax(GW_strain[:,0]>=0.0025)
+        h_dot = IDL_derivative(GW_strain[:,0], GW_strain[:,1])
+        sign_change = np.where(h_dot[:-1] * h_dot[1:] < 0, 1, 0)
+        index_min = np.argmin(GW_strain[bounce_index:index_5ms, 1]) + bounce_index
+        bounce_index = index_min
+        index_max = index_min
+        while index_max == index_min:
+            index_max = np.argmax((sign_change[bounce_index:index_5ms] == 1) & (GW_strain[bounce_index:index_5ms, 1] > 0)) + bounce_index
+            index_5ms = int ( index_5ms * 1.2 )
+        Dh = np.abs(GW_strain[index_max, 1]) + np.abs(GW_strain[index_min, 1])
+        if not correct_for_tob:
+            GW_strain[:, 0] += self.time_of_bounce_rho()
+        if return_coordinates:
+            return Dh, np.array([GW_strain[index_min, 1], GW_strain[index_max, 1]]), \
+                   np.array([GW_strain[index_min, 0], GW_strain[index_max, 0]])                        
+        else:
+            return Dh
+    
     #misc from h5 file: grav pot, time
     def grav_pot(self, data_h5):
         data = np.array(data_h5['gravpot']['data'])
         if data.ndim == 4:
             data = data[..., 0]
         return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
+    
+    def gravitational_energy(self, data_h5):
+        return 0.5 * self.rho(data_h5) * self.grav_pot(data_h5)
 
     def time(self, data_h5, correct_for_tob=False):
         if correct_for_tob:
@@ -434,7 +474,7 @@ class SimulationAnalysis:
         If we do not reach that density we lower the threshold to 2
         """
         rho_data = self.rho_max(False)
-        rho_index = np.argmax(rho_data[:,1]>2e14)
+        rho_index = np.argmax(rho_data[:,1] > 1.4e14)
         if rho_index == 0 or rho_data[rho_index, 0] >= 0.6:
             rho_index = np.argmax(rho_data[:,1]>2e14)
         return rho_data[rho_index, 0]
@@ -577,6 +617,32 @@ class SimulationAnalysis:
         omega = self.omega(data_h5)
         radius = self.cell.radius(self.ghost)
         return IDL_derivative(radius, omega)
+    
+    def innercore_radius_single(self, data_h5):
+        """
+        We define the inner core of a star as the region in sonic contact with the
+        centre. This is the region where the velocity of the fluid is lower than the
+        speed of sound.
+        """
+        cs2 = self.speed_of_sound(data_h5) ** 2
+        velocity = self.radial_velocity(data_h5) ** 2
+        radius = self.cell.radius(self.ghost)
+        return radius[np.argmax(velocity >= cs2, axis = -1)]
+    
+    def innercore_radius(self, tob_correction, save_name = 'innercore_radius', **kwargs):
+        self.__save_radii('innercore', tob_correction, save_name, **kwargs)
+
+    def get_innercore_radius(self, innercore_radius = False, indices = False, min_max_average = False,
+                                ret_time = False, ghost_cells = False, tob_corrected = True):
+        innercore_file = os.path.join(self.storage_path,'innercore_radius.h5')
+        if not os.path.exists(innercore_file):
+            warnings.warn("Innercore radius file not found. Creating one with default settings.\n" + \
+                          "If different settings are needed please refer to the " + \
+                          "\"Innercore_radius(...)\" method")
+            g = self.ghost_cells - 1
+            self.innercore_radius(tob_corrected, t_l = g, t_r = g, p_l = g, p_r = g)
+        return self.__get_radii(innercore_file, innercore_radius, indices, min_max_average,
+                                ret_time, ghost_cells, tob_corrected)
        
     def PNS_radius_single(self, data_h5):
         """
@@ -607,7 +673,7 @@ class SimulationAnalysis:
     def gain_radius_single(self, data_h5, PNS_radius):
         """
         We find the gain radius as the region outside the PNS where neutrino
-        heating dominates over neutrino cooling. 
+        heating dominates over neutrino cooling.
         """
         radius = self.cell.radius(self.ghost)
         nu_heat = self.nu_heat(data_h5)
@@ -807,12 +873,13 @@ class SimulationAnalysis:
         return self.__get_radii(shock_file, shock_radius, indices, min_max_average,
                                 ret_time, ghost_cells, tob_corrected)
 
-    def __save_radii(self, radius_to_calculate: Literal['PNS', 'gain', 'shock', 'neutrino'], tob_correction, 
+    def __save_radii(self, radius_to_calculate: Literal['PNS', 'gain', 'shock', 'neutrino', 'innercore'], tob_correction, 
                 save_name, **kwargs):
         methods = {'PNS': self.PNS_radius_single,
                    'gain': self.gain_radius_single,
                    'neutrino': self.neutrino_sphere_radius_single, 
-                   'shock': self.shock_radius_single}
+                   'shock': self.shock_radius_single,
+                   'innercore': self.innercore_radius_single}
         save_path = check_path(self.storage_path, save_name)
         self.ghost.update_ghost_cells(**kwargs)
         file_list = self.file_list_hdf()
@@ -961,6 +1028,83 @@ class SimulationAnalysis:
             print("Nothing to return :(")
             return None
         return quantities_list
+    
+    def get_innercore_mass_enregies(self, time = False, mass = False, kin_rot_ene = False,
+                                    kin_tot_ene = False, mag_ene = False, grav_ene = False,
+                                    T_W = False, tob_corrected = True):
+        innercore_file = os.path.join(self.storage_path,'innercore_mass_energies.h5')
+        if not os.path.exists(innercore_file):
+            warnings.warn("Innercore quantities file not found. Creating one with default settings.\n" + \
+                          "If different settings are needed please refer to the " + \
+                          "\"shock_radius(...)\" method")
+            self.__save_innercore_mass_energies()
+        data = h5py.File(innercore_file, 'r')
+        quantities_list = []
+        if time:
+            if (tob_corrected and data['tob_correction']) or \
+                not (tob_corrected and data['tob_correction']):
+                quantities_list.append(np.array(data['time']))
+            elif tob_corrected and not data['tob_correction']:
+                quantities_list.append(np.array(data['time']) - self.time_of_bounce_rho())
+            else:
+                quantities_list.append(np.array(data['time']) + self.time_of_bounce_rho())
+        if mass:
+            quantities_list.append(np.array(data['mass']))
+        if kin_rot_ene:
+            quantities_list.append(np.array(data['kin_rot_ene']))
+        if kin_tot_ene:
+            quantities_list.append(np.array(data['kin_tot_ene']))
+        if mag_ene:
+            quantities_list.append(np.array(data['mag_ene']))
+        if grav_ene:
+            quantities_list.append(np.array(data['grav_ene']))
+        if T_W:
+            quantities_list.append(np.array(data['T_W']))
+        self.close_h5(data)
+        if len(quantities_list) == 1:
+            return quantities_list[0]
+        if len(quantities_list) == 0:
+            print("Nothing to return :(")
+            return None
+        return quantities_list
+        
+    
+    def __save_innercore_mass_energies(self):
+        rad_in, indices, time, g_cells = self.get_innercore_radius(innercore_radius = True,
+                                        indices = True, min_max_average = False, ret_time = True,
+                                        ghost_cells = True, tob_corrected = True)
+        data_out = np.zeros((time.size, 6))
+        data_out[:, 0] = time - self.time_of_bounce_rho()
+        file_list = self.file_list_hdf()
+        dV = self.cell.dVolume_integration(self.ghost)
+        radius = self.cell.radius(self.ghost)
+        for file, index in zip(file_list, indices):
+            ## Quantities calculation
+            data_h5 = self.open_h5(file)
+            rho = self.rho(data_h5)
+            rot_ene = 0.5 * rho * self.phi_velocity(data_h5) ** 2
+            kin_ene = 0.5 * (self.theta_velocity(data_h5) + self.radial_velocity(data_h5)) ** 2 +\
+                    rot_ene
+            ene_mag = self.magnetic_energy_per_unit_volume(data_h5)
+            ene_grav = 0.5 * self.grav_pot(data_h5) * rho
+            self.close_h5(data_h5)
+            dVolume = np.where(radius <= self.ghost.remove_ghost_cells_radii(rad_in[..., index],
+                                        self.dim, **g_cells)[..., None], dV, 0)
+            data_out[index, 1] = u.convert_to_solar_masses(np.sum(rho * dVolume))
+            data_out[index, 2] = np.sum(rot_ene * dVolume)
+            data_out[index, 3] = np.sum(kin_ene * dVolume)
+            data_out[index, 4] = np.sum(ene_mag * dVolume)
+            data_out[index, 5] = np.sum(ene_grav * dVolume)
+        file_out = h5py.File(os.path.join(self.storage_path, 'innercore_mass_energies.h5'), 'w')
+        file_out.create_dataset('time', data = data_out[:, 0])
+        file_out.create_dataset('mass', data = data_out[:, 1])
+        file_out.create_dataset('kin_rot_ene', data = data_out[:, 2])
+        file_out.create_dataset('kin_tot_ene', data = data_out[:, 3])
+        file_out.create_dataset('mag_ene', data = data_out[:, 4])
+        file_out.create_dataset('grav_ene', data = data_out[:, 5])
+        file_out.create_dataset('T_W', data = np.abs(data_out[:, 2] / data_out[:, 5]))
+        file_out.create_dataset('tob_correction', data = True)
+        file_out.close()
 
     def __save_energies_and_masses(self, save_path, tob_corrected):
         PNS = self.__PNS_energies_and_mass(tob_corrected)
