@@ -7,6 +7,7 @@ import h5py
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.signal import stft
+from scipy.fft import fft, fftfreq
 
 dirname = os.path.dirname(__file__)
 sys.path.append(os.path.join(dirname,'../..'))
@@ -14,7 +15,7 @@ from scidata.units.units import units
 
 from scidata.cell.cell import cell as cl
 from scidata.cell.ghost import ghost as gh
-from scidata.file_manipulation_functions.load_file import load_file
+from scidata.file_manipulation_functions.load_file import load_file, find_column_changing_line
 from scidata.file_manipulation_functions.save_file import save_h5
 from scidata.grid.grid import grid as gr
 from scidata.legendre.legendre_polynomials import legendre_polynomials as LegP
@@ -138,7 +139,6 @@ class SimulationAnalysis:
 
     def chemical_potential_neutrinos(self, data_h5):
         data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_CPOT'][3]]
-        print(self.hydroTHD_index['thd']['I_CPOT'][3])
         return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
 
     def neutron_fraction(self, data_h5):
@@ -198,27 +198,52 @@ class SimulationAnalysis:
         bin_energies = np.loadtxt(os.path.join(self.grid_path, self.nu_e_grid))
         return bin_energies[:,3] - bin_energies[:,1]
 
-    def neutrino_flux(self, data_h5):
+    def neutrino_flux_tot(self, data_h5):
         """
         Last index is the neutrino flavour: nue, nua, nux.
         Second-last index is the energy bin index.
         """
-        nu_out = np.array(data_h5['neutrino']['e'])[:,:,:,:,:,1]
-        nu_out[:, :, :, :, 2] /= 4
+        nu_out = np.array(data_h5['neutrino']['e'])[..., 1:]
+        
+        nu_out = nu_out.sum(axis=-1)
+        nu_out[..., 2] /= 4
+
         return self.ghost.remove_ghost_cells(np.squeeze(nu_out), self.dim)
 
-    def neutrino_flux_bin_integrated(self, data_h5):
+    def neutrino_energy_density(self, data_h5):
+        """
+        Returns the 0th moment (energy density) into neutrino flavour 
+        """
+        nu_out = np.array(data_h5['neutrino']['e'])[..., 0]
+        nu_out[..., 2] /= 4
+        return self.ghost.remove_ghost_cells(np.squeeze(nu_out), self.dim)
+    
+    def neutrino_energy_density_bin_integrated(self, data_h5):
+        nu_out = self.neutrino_energy_density(data_h5)
+        return nu_out.sum(axis=self.dim)
+
+    def neutrino_fluxes(self, data_h5):
+        """
+        Returns the neutrino fluxes per direction and neutrino flavour
+        Last index: direction, 0:r 1:theta 2:phi
+        second to last neutrino flavour
+        """
+        nu_out = np.array(data_h5['neutrino']['e'])[..., 1:]
+        nu_out[..., 2, :] /= 4
+        return self.ghost.remove_ghost_cells(np.squeeze(nu_out), self.dim)
+
+    def neutrino_flux_tot_bin_integrated(self, data_h5):
         """
         Last index is the neutrino flavour: nue, nua, nux
         """
-        nu = self.neutrino_flux(data_h5)
+        nu = self.neutrino_flux_tot(data_h5)
         return nu.sum(axis = self.dim)
 
-    def neutrino_number_flux(self, data_h5, ret_nu_flux = False):
+    def neutrino_number_flux_tot(self, data_h5, ret_nu_flux = False):
         """
         Last index is the neutrino flavour: nue, nua, nux
         """
-        nu = self.neutrino_flux(data_h5)
+        nu = self.neutrino_flux_tot(data_h5)
         bin_energies = 1/u.convert_to_erg(self.neutrino_energy_grid())
         bin_energies = bin_energies[None, :, None]
         while bin_energies.ndim != nu.ndim:
@@ -231,7 +256,7 @@ class SimulationAnalysis:
         """
         Last index is the neutrino flavour: nue, nua, nux
         """
-        data = np.array(data_h5['neutrino']['oe'])[:,:,:,:,:,1]
+        data = np.array(data_h5['neutrino']['oe'])[...,1:]
         return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
 
     def neutrino_luminosity_profile(self, data_h5):
@@ -243,7 +268,7 @@ class SimulationAnalysis:
         3: grey nux luminosity  6: grey nux number luminosity
         """
         dV = self.cell.dVolume_sum(self.ghost)
-        neutrino_fl, neutrino_num_fl = self.neutrino_number_flux(data_h5, True)
+        neutrino_fl, neutrino_num_fl = self.neutrino_number_flux_tot(data_h5, True)
         neutrino_fl *= dV[..., None, None]
         neutrino_num_fl *= dV[..., None, None]
         return np.concatenate((neutrino_fl.sum(axis = self.dim),
@@ -344,9 +369,10 @@ class SimulationAnalysis:
             Column 5: x polarization polar plane
         """
         data = load_file(self.log_path, self.grw)
+        column_change = find_column_changing_line(self.log_path, self.grw)
         if correct_for_tob:
             data[:,2] -= self.time_of_bounce_rho()
-        return GW_strain(self.dim, data)
+        return GW_strain(self.dim, column_change, data)
     
     def GW_dimensionless_strain(self, distance, angle = 0.5 * np.pi, correct_for_tob=True):
         """
@@ -370,34 +396,368 @@ class SimulationAnalysis:
         data[:, 1:] *= const
         return data
     
-    def Deltah(self, return_coordinates = False, correct_for_tob=True):
+    def AE220(self, correct_for_tob = True):
+        """
+        Calculates the AE220 from density and velocities for a
+        2D simulation.
+        ONLY 2D
+        Returns
+            radius
+            time: array of time step
+            AE220: len(radius), len(time) array
+        """
+        AE220_file = os.path.join(self.storage_path,'AE220.h5')
+        if not os.path.exists(AE220_file):
+            warnings.warn("AE220 file not found. Creating one. \nPlease wait...")
+            time, AE220 = self.__AE220()
+            AE220_hdf = h5py.File(AE220_file, 'w')
+            AE220_hdf.create_dataset('time', data = time)
+            AE220_hdf.create_dataset('AE220', data = AE220)
+            AE220_hdf.close()
+        data = self.open_h5(AE220_file)
+        time = data["time"][...]
+        AE220 = data["AE220"][...]
+        self.close_h5(data)
+        const = -0.125 *  np.sqrt(15/np.pi)
+        if not correct_for_tob:
+            time += self.time_of_bounce_rho()
+        return self.cell.radius(self.ghost), time, AE220 * const
+
+
+    def __AE220(self):
+        """
+        Calculates the AE220 from density and velocities for a
+        2D simulation.
+        ONLY 2D
+        Returns
+            time: arry of time step
+            AE220: len(radius), len(time) array
+        """
+        radius = self.cell.radius(self.ghost)
+        dV = -self.cell.dVolume_integration(self.ghost)
+        costheta = np.cos(self.cell.theta(self.ghost))
+        file_list = self.file_list_hdf()
+        time = np.zeros(len(file_list))
+        NE220 = np.zeros((len(radius), len(time)))
+        radius = radius[None, ...]
+        costheta = costheta[..., None]
+        for index in range(len(file_list)):
+            data_h5 = self.open_h5(file_list[index])
+            rho = self.rho(data_h5)
+            vR = self.radial_velocity(data_h5)
+            vT = self.theta_velocity(data_h5)
+            time[index] = self.time(data_h5)
+            self.close_h5(data_h5)
+            NE220[:, index] = np. sum( dV * radius * rho *  ( vR * \
+                ( 3 * costheta ** 2 - 1 ) - 3 * vT * costheta * np.sqrt( 1 - costheta ** 2 ) ), 
+                axis = 0 )
+        NE220 *= ( u.G * 16 * np.pi ** 0.5 / (np.sqrt( 15 ) * u.speed_light ** 4 ) )
+            
+        return time - self.time_of_bounce_rho(), IDL_derivative(time, NE220)
+        
+    
+    def GW_spectrogram(self, window_size = 10, GW_norm = 1, correct_for_tob = True):
+        """
+        Parameters:
+            window_size: value of the time window to use in ms
+            GW_norm: factor that multiplies the GW strain
+            correct_for_tob: if the returned timeseries has to be corrected for the tob
+        Returns:
+            time: timeseries in s
+            frequency: aray of the frequencies in Hz
+            Zxx: magnitude
+        """
+        GW_strain = self.GW_Amplitudes(correct_for_tob=False)
+        GW_strain[:, 1] *= GW_norm
+        window = 0
+        while np.abs(GW_strain[window,0] - GW_strain[0,0]) < u.convert_to_s(window_size):
+            window += 1
+        fs = (GW_strain[1, 0] - GW_strain[0, 0]) ** (-1)
+        frequency, time, Zxx = stft(GW_strain[:,1], fs = fs, nperseg=window)
+        time = time / time[-1] * GW_strain[-1, 0]
+        if correct_for_tob:
+            time -= self.time_of_bounce_rho()
+        return time, frequency, np.abs(Zxx)
+    
+    def Deltah(self, peak:Literal['bounce', 'highest', 'second_highest'],
+               interval = [None, None], return_coordinates = False,
+               corrected_for_tob = True):
         """
         Returns the Delta h of the gravitational wave strain as defined in
         Richers et al. 2017 (https://arxiv.org/pdf/1701.02752.pdf).
         Basically the difference between the first maximum and minimum postbounce,
         the first peak that appears is not considered.
+        In case the highest or second_highest peaks are selected the amplitude returned is the maxima
+        between left and right.
+        Return:
+            amplitude in cm
+            if return coordinates
+                time, h of the highest and lowest peak
         """
-        GW_strain =self.GW_Amplitudes()[:, 0:2]
-        if self.dim == 1:
-            return None
-        bounce_index = np.argmax(GW_strain[:,0]>=0) - 5
-        index_5ms = np.argmax(GW_strain[:,0]>=0.0025)
-        h_dot = IDL_derivative(GW_strain[:,0], GW_strain[:,1])
-        sign_change = np.where(h_dot[:-1] * h_dot[1:] < 0, 1, 0)
-        index_min = np.argmin(GW_strain[bounce_index:index_5ms, 1]) + bounce_index
-        bounce_index = index_min
-        index_max = index_min
-        while index_max == index_min:
-            index_max = np.argmax((sign_change[bounce_index:index_5ms] == 1) & (GW_strain[bounce_index:index_5ms, 1] > 0)) + bounce_index
-            index_5ms = int ( index_5ms * 1.2 )
-        Dh = np.abs(GW_strain[index_max, 1]) + np.abs(GW_strain[index_min, 1])
-        if not correct_for_tob:
-            GW_strain[:, 0] += self.time_of_bounce_rho()
-        if return_coordinates:
-            return Dh, np.array([GW_strain[index_min, 1], GW_strain[index_max, 1]]), \
-                   np.array([GW_strain[index_min, 0], GW_strain[index_max, 0]])                        
+        GWs = self.GW_Amplitudes(True)
+        case_selected = 0
+        bounce_peak_index = self.__GWs_peak_indices(GWs, 'bounce', interval)
+        if peak != 'bounce':
+            peak_index = self.__GWs_peak_indices(GWs, peak, interval)
+            if np.abs(GWs[peak_index[1], 0] - GWs[bounce_peak_index[1], 0]) < u.convert_to_s(2):
+                peak_index = bounce_peak_index[1]
+                case_selected = 1
+            else:
+                peak_index = peak_index[1]
+                case_selected = 2
         else:
-            return Dh
+            peak_index = bounce_peak_index[1]
+            case_selected = 1
+        
+        if case_selected == 1:
+            GWs = GWs[:peak_index + 1, :]
+            dh_dt = np.flip(IDL_derivative(GWs[:, 0], GWs[:, 1]))
+            indices = dh_dt.size - 1 - np.argwhere(dh_dt[1:] * dh_dt[:-1] < 0)[:, 0]
+            for i in indices:
+                if GWs[i, 1] < 0:
+                    low_peak = i
+                    break
+        elif case_selected == 2:
+            ## check a window of 5 ms for each side
+            window = int( 10 / u.convert_to_ms( GWs[1, 0] - GWs[0, 0] ) )
+            dh_dt_right = IDL_derivative( GWs[peak_index:peak_index + window, 0], GWs[peak_index:peak_index + window, 1] )
+            indices_right = np.argwhere( dh_dt_right[1:] * dh_dt_right[:-1] < 0)[:, 0] + peak_index
+            for i in indices_right:
+                if GWs[i, 1] < 0:
+                    low_peak_right = i
+                    break
+            dh_dt_left = np.flip( IDL_derivative( GWs[peak_index - window:peak_index, 0], GWs[peak_index - window:peak_index, 1] ) )
+            indices_left = dh_dt_left.size - 1 - np.argwhere( dh_dt_left[1:] * dh_dt_left[:-1] < 0)[:, 0] + peak_index - window
+            for i in indices_left:
+                if GWs[i, 1] < 0:
+                    low_peak_left = i
+                    break
+            if np.abs( GWs[peak_index, 1] - GWs[low_peak_left, 1] ) > \
+               np.abs( GWs[peak_index, 1] - GWs[low_peak_right, 1] ):
+                low_peak = low_peak_left
+            else:
+                low_peak = low_peak_right
+        ## If no left or right peak is found Dh is 0
+        try:
+            deltah = np.abs(GWs[peak_index, 1] - GWs[low_peak, 1])
+        except:
+            deltah = 0
+        if return_coordinates:
+            if not corrected_for_tob:
+                GWs[:, 0] += self.time_of_bounce_rho()
+            try:
+                return deltah, [GWs[peak_index, 0], GWs[low_peak, 0]], [GWs[peak_index, 1], GWs[low_peak, 1]]
+            except:
+                if not corrected_for_tob:
+                    return deltah, [0, 0], [self.time_of_bounce_rho(), self.time_of_bounce_rho()]
+                else:
+                    return deltah, [0, 0], [0, 0]
+        else:
+            return deltah
+
+
+    def GWs_peak(self, peak:Literal['bounce', 'highest', 'second_highest'] = 'bounce',
+                 interval = [None, None], return_time = False):
+        """
+        This method calculate the value of the GWs strain peak and its position in time
+        Return:
+            Peak value
+            OR
+            time, peak
+        """
+        GWs = self.GW_Amplitudes(True)
+        indices = self.__GWs_peak_indices(GWs, peak, interval)
+        if return_time:
+            return GWs[indices[1], 0], GWs[indices[1], 1]
+        else:
+            return GWs[indices[1], 1]
+
+    def GWs_fourier_transform(self, peak:Literal['bounce', 'highest', 'second_highest'] = 'bounce',
+                              interval = [None, None]):
+        """
+        Method that calculates the fourier transform of a specific GWs peak.
+        The rest of the array will be padded with zeros to increase the resolution
+        Return:
+            frequency array
+            fourier transformed strain x sqrt{frequency}
+        """
+        GWs = self.GW_Amplitudes(True)
+        indices = self.__GWs_peak_indices(GWs, peak, interval)
+        return self.__GWs_fourier_transform(GWs, indices)
+    
+    def GWs_peak_frequencies(self, peak:Literal['bounce', 'highest', 'second_highest'] = 'bounce',
+                              interval = [None, None], return_intensities = False, return_fourier = False):
+        """
+        Calculates the dominant and the second dominant frequency of a GWs peak
+        Return:
+            frequencies: dominat, second dominant
+            if return intensities
+                intensities: dominant, second dominant
+            if return return fourier
+                frequencies array
+                htilde
+        """
+        frequency, htilde = self.GWs_fourier_transform(peak, interval)
+        indices = self.__GWs_frequency_peak_indices(frequency, htilde)
+        return_list = [frequency[indices]]
+        if return_intensities:
+            return_list.append(htilde[indices])
+        if return_fourier:
+            return_list.append([frequency, htilde])
+        if len(return_list) == 1:
+            return return_list[0]
+        return return_list
+            
+
+    def __GWs_peak_indices(self, GWs, peak, interval):
+        """
+        Method that finds the coordinates of the one of a specific peak of the GWs strain as well as 
+        the coordinates of the points before and after the oscillation. Namely the latter are the
+        first intersection point with the x axis after the peak and the third one before it.
+        Parameters:
+            peak: which peak to find, can be the bounce peak, highest or second highest in an interval
+            interval: interval (in ms) in which the peak has to be found, if only one value is provided, that
+                    would be used as the right hand side
+        Returns:
+            list containing left index, peak index, right index
+        """
+        
+        ## CUT THE DATA
+        if type(interval) != list:
+            interval = [interval]
+        assert len(interval) <= 2, "Interval MUST contain at most 2 values"
+        interval = [u.convert_to_s(i) if i is not None else i for i in interval]
+        index_start = 0
+        if peak != 'bounce':
+            if len(interval) == 1:
+                if interval[0] is not None:
+                    assert max(interval) <= GWs[:, 0].max(), "Interval values are out of range"
+                    index_end = np.argmax(GWs[:, 0] >= interval[0])
+                    GWs = GWs[:index_end, :]
+                else:
+                    pass
+            elif len(interval) == 2:
+                if interval == [None, None]:
+                    pass
+                elif interval[0] == None:
+                    assert interval[1] <= GWs[:, 0].max(), "Interval values are out of range"
+                    index_end = np.argmax(GWs[:, 0] >= interval[1])
+                    GWs = GWs[:index_end, :]
+                elif interval[1] == None:
+                    assert interval[0] >= GWs[:, 0].min(), "Interval values are out of range"
+                    index_start = np.argmax(GWs[:, 0] >= interval[0])
+                    GWs = GWs[index_start:, :]
+                else:
+                    assert interval[0] >= GWs[:, 0].min() and interval[1] <= GWs[:, 0].max(), "Interval values are out of range"
+                    index_start =  np.argmax(GWs[:, 0] >= interval[0])
+                    index_end = np.argmax(GWs[:,0] >= interval[1])
+                    GWs = GWs[index_start:index_end, :]
+        ## DERIVE THE DATA
+        dGWs_dt = IDL_derivative(GWs[:, 0], GWs[:, 1])
+        sign = dGWs_dt[1:] * dGWs_dt[:-1]
+        sign_strain = GWs[1:, 1] * GWs[:-1, 1]
+        #find the indices at
+        if peak == 'bounce':
+            ## Find the left peak as the first time the strain chenges goes below 0
+            bounce_index = np.argmax( GWs[:, 0] >= 0 )
+            left_index = np.argmax(GWs[:,1] >= 0) #bounce_index - np.argmax( np.flip( GWs[:bounce_index, 1] ) <= 0 )
+            ## find the peak
+            index_beginning_peak = left_index
+            ## To minimize the error we start to look for the bounce peak 2 ms before the bounce
+            if GWs[index_beginning_peak, 0] < -u.convert_to_s(2):
+                index_beginning_peak = np.argmax( GWs[:, 0] >= -u.convert_to_s(2))
+            peak_index = np.argwhere( sign[index_beginning_peak + 1:] <= 0)[:, 0] + index_beginning_peak + 1
+            bounce_passed = False
+            for index in peak_index:
+                if GWs[index, 1] > 0 and not bounce_passed:
+                    bounce_passed = True
+                elif GWs[index, 1] > 0 and bounce_passed:
+                    peak_index = index
+                    break
+            #find right index
+            right_index = np.argmax(sign_strain[peak_index:] < 0) + peak_index + 1
+        elif peak == 'highest' or peak == 'second_highest':
+            ## Find the peak
+            peak_index = np.argmax(GWs[:, 1])
+            if peak == 'second_highest':
+                peak_indices = np.argwhere(sign <= 0)[:, 0]
+                second_peak = 0
+                for index in peak_indices:
+                    if np.abs(GWs[index, 0] - GWs[peak_index, 0]) <= u.convert_to_s(2) or \
+                        GWs[index, 0] <= u.convert_to_s(2) or \
+                        GWs[index, 1] <= 0:
+                        continue
+                    elif GWs[index, 1] > GWs[second_peak, 1]:
+                            second_peak = index
+                peak_index = second_peak
+
+            ## find right index
+            right_index = np.argmax(sign_strain[peak_index:] < 0) + peak_index + 1
+            ## find left index
+            left_index = peak_index - np.argwhere(np.flip(sign[:peak_index]))[:, 0]
+            passed_min = False
+            for index in left_index:
+                if GWs[index, 1] > 0 and passed_min:
+                    left_index = index
+                    break
+                elif GWs[index, 1] < 0 and not passed_min:
+                    passed_min = True
+            if left_index.size > 1:
+                left_index = 0
+            else:
+                left_index = left_index - np.argmax ( np.flip( sign_strain[:left_index] ) < 0) - 1
+
+        return [left_index + index_start,
+                peak_index + index_start,
+                right_index + index_start]
+
+    def __GWs_fourier_transform(self, GWs, indices):
+        """
+        This method applies FFT to a small portion of the GW strain to find the domiunant frequency of a specific
+        obsillation
+        Returns
+            positive frequency range
+            $\tilde{h} * \sqrt{freq}$
+        """
+        dt = np.abs(GWs[1, 0] - GWs[0, 0])
+        ## Cut the GWs signal
+        strain = np.zeros(11000)
+        ## Pad the strain with zeros to increase the resolution
+        if (GWs[indices[0]:indices[-1], 1]).size < 11000:
+            strain[11000 - (GWs[indices[0]:indices[-1], 1]).size:] = GWs[indices[0]:indices[-1], 1]
+        else:
+            strain = GWs[indices[0]:indices[-1], 1]
+        #find the frequencies
+        freq = fftfreq(strain.size, dt)
+        #freq = np.where(freq < 0, 0, freq)
+        dft = np.abs(fft(strain)) * np.sqrt(freq)
+        dft = np.where(freq > 0, dft, 0)
+        freq = np.where(freq < 0, 0, freq)
+        return freq, dft
+
+    def __GWs_frequency_peak_indices(self, frequency, htilde):
+        """
+        Method that find the indices of the first and second frequency peak on
+        a fourier transformed GW strain
+        Return:
+            list containing: first peak index, second peak index 
+        """
+        dhtilde_df = IDL_derivative(frequency, htilde)
+        sign = dhtilde_df[1:] * dhtilde_df[:-1]
+        ## FInd the peak frequency of the strain
+        peak_frequency_index = np.argmax(htilde)
+
+
+        ## find derivative sign change
+        indices = np.argwhere( sign < 0)[:, 0]
+        second_peak_index = 0
+        for index in indices:
+            if ( htilde[index] > htilde[second_peak_index] and \
+                htilde[index] < htilde[peak_frequency_index] and \
+                np.abs( frequency[index] - frequency[peak_frequency_index] ) > 10 and \
+                frequency[index] > 200 ):
+                second_peak_index = index
+        return [peak_frequency_index, second_peak_index]
     
     #misc from h5 file: grav pot, time
     def grav_pot(self, data_h5):
@@ -601,7 +961,64 @@ class SimulationAnalysis:
         if corrected_by_tob:
             en[:,2] -= self.time_of_bounce_rho()
         return np.stack((en[:, 2], en[:, 3]), axis = 1)
+
+    def BV_frequency(self, data_h5):
+        """
+        Returns the Brunt-Väisälä frequency for a specific timestep
+        """
+        
+        omega_BV = ( 1 / self.speed_of_sound(data_h5) ** 2 * IDL_derivative( self.cell.radius(self.ghost), self.gas_pressure(data_h5) ) - \
+            IDL_derivative( self.cell.radius(self.ghost), self.rho(data_h5) ) ) * IDL_derivative( self.cell.radius(self.ghost), self.grav_pot(data_h5) ) / self.rho(data_h5)
+        return omega_BV
     
+    def BV_frequency_profile(self, tob_corrected = True):
+        """
+        Calculates the Brunt-Väisälä frequency and returns three arrays
+        time: array of time steps
+        radius: array of radial distance from tne center
+        omega_BV: array of len(radius) x len(time) containing the angular averaged BV frequency 
+        """
+        BV_file = os.path.join(self.storage_path, 'BV_frequency.h5')
+        if not os.path.exists(BV_file):
+            warnings.warn("BV frequency file not found. Creating one...\n" + \
+                          "Please wait...")
+            time, radius, omega_BV = self.__BV_frequency_profile()
+            file_h5 = h5py.File(BV_file, 'w')
+            file_h5.create_dataset("time", data=time)
+            file_h5.create_dataset("radius", data=radius)
+            file_h5.create_dataset("BV_frequency", data=omega_BV)
+            file_h5.create_dataset("ToB_corrected", data=True)
+            file_h5.close()
+        data = self.open_h5(BV_file)
+        time = data["time"][...]
+        omega_BV = data["BV_frequency"][...]
+        radius = data["radius"][...]
+        if not tob_corrected:
+            time += self.time_of_bounce_rho()
+        return time, radius, omega_BV
+
+    def __BV_frequency_profile(self):
+        """
+        Returns the Brunt-Väisälä frequency radial profile, using the angular averaged quantities
+        """
+        file_list_hdf = self.file_list_hdf()
+        radius = self.cell.radius(self.ghost)
+        indices = np.arange(len(file_list_hdf))
+        omega_BV = np.zeros((len(radius), len(file_list_hdf)))
+        time = np.zeros(len(file_list_hdf))
+        for (file, i) in zip(file_list_hdf, indices):
+            data_h5 = self.open_h5(file)
+            time[i] = self.time(data_h5)
+            if self.dim == 1:
+               omega_BV[:, i] = self.BV_frequency(data_h5)
+            else:
+                cs2 = self.speed_of_sound(data_h5).mean(axis = tuple(range(self.dim - 1))) ** 2
+                pgas =  self.gas_pressure(data_h5).mean(axis = tuple(range(self.dim - 1)))
+                rho = self.rho(data_h5).mean(axis = tuple(range(self.dim - 1)))
+                phi = self.rho(data_h5).mean(axis = tuple(range(self.dim - 1)))
+                omega_BV[:, i] = ( 1 / cs2 * IDL_derivative( radius, pgas ) - IDL_derivative( radius, rho )) * IDL_derivative( radius, phi ) / rho
+        return time - self.time_of_bounce_rho(), radius, omega_BV 
+
     #derivatives
     def velocity_radial_derivative(self, data_h5):
         radius = self.cell.radius(self.ghost)
@@ -709,15 +1126,19 @@ class SimulationAnalysis:
         tau = int^R_\infty dr k(r, \theta, \phi)
         """
         tau = 1.0
-        neutrino_fluxes = self.neutrino_flux(data_h5)
+        neutrino_fluxes = self.neutrino_fluxes(data_h5)
         neutrino_opacities = self.neutrino_opacity_flux(data_h5)
         dr = self.cell.dr(self.ghost)[..., None]
-        while (neutrino_fluxes.ndim - 1) != dr.ndim:
-            dr = dr[None, ...]
-        neutrino_data = np.sum(neutrino_fluxes*neutrino_opacities, axis = self.dim) / \
-                        np.sum(neutrino_fluxes, axis = self.dim) * dr
+        if self.dim > 1:
+            neutrino_data = np.sum(np.sum(neutrino_fluxes*neutrino_opacities, axis = self.dim), axis=-1) / \
+                            np.sum(np.sum(neutrino_fluxes, axis = self.dim), axis=-1)
+        else:
+            neutrino_data = np.sum(neutrino_fluxes*neutrino_opacities, axis = self.dim) / \
+                            np.sum(neutrino_fluxes, axis = self.dim)
         np.nan_to_num(neutrino_data, False, 0)
-        neutrino_data = np.flip(neutrino_data, axis = -2)
+        while (neutrino_data.ndim) != dr.ndim:
+            dr = dr[None, ...]
+        neutrino_data = np.flip(neutrino_data * dr, axis = -2)
         ind = np.argmax(np.cumsum(neutrino_data, axis = -2) >= tau, axis = -2)
         radius = np.flip(self.cell.radius(self.ghost))
         if type(ind) == int:
@@ -1074,7 +1495,7 @@ class SimulationAnalysis:
                                         indices = True, min_max_average = False, ret_time = True,
                                         ghost_cells = True, tob_corrected = True)
         data_out = np.zeros((time.size, 6))
-        data_out[:, 0] = time - self.time_of_bounce_rho()
+        data_out[:, 0] = time
         file_list = self.file_list_hdf()
         dV = self.cell.dVolume_integration(self.ghost)
         radius = self.cell.radius(self.ghost)
@@ -1373,8 +1794,12 @@ class SimulationAnalysis:
         GW = self.GW_Amplitudes(tob_corrected)
         file_out.create_dataset("tob_correction", data = tob_corrected)
         GW_group = file_out.create_group("GWs")
-        GW_group.create_dataset("time", data = GW[:, 0])
-        GW_group.create_dataset("GWs", data = GW[:, 1])
+        if self.dim == 1:
+            GW_group.create_dataset("time", data = 0)
+            GW_group.create_dataset("GWs", data = 0)
+        else:
+            GW_group.create_dataset("time", data = GW[:, 0])
+            GW_group.create_dataset("GWs", data = GW[:, 1])
         modes_group = file_out.create_group("dipole_modes")
         for o in range(7):
             mode = self.__dipole(o, tob_corrected)
