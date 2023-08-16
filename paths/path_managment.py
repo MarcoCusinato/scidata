@@ -72,12 +72,14 @@ def list_of_paths(files_path, single_paths):
 
 def remove_not_useful_folders(dirs):
     """
-    Removes the Initial models and EOS folders from a list of directories
+    Removes the folders containing the equations of state and initial models
+    from a list of directories
     """
-    while 'Initial_Models' in dirs:
-        dirs.remove('Initial_Models')
-    while 'EOS' in dirs:
-        dirs.remove('EOS')
+    dirs_to_remove = ['EOS', 'Initial_models', 'presn_models',
+                     'Stellarcollapse_EOS', 'CompOSE_EOS']
+    for dir in dirs_to_remove:
+        while dir in dirs:
+            dirs.remove(dir)
     return dirs
 
 def check_subpaths_for_simulations(path, simDict, simulations):
