@@ -27,6 +27,7 @@ from scidata.paths.existence import check_path
 from scidata.paths.path_managment import find_simulation
 from scidata.platform.platform import local_storage_folder, pltf
 from scidata.GWs_strain.GWs import GW_strain
+from scidata.GWs_strain.spectrogram import GW_spectrogram
 
 u = units()
 
@@ -188,6 +189,11 @@ class SimulationAnalysis:
         chem_pot = self.chemical_potential_neutrinos(data_h5)
         temp = self.temperature(data_h5)
         return chem_pot/temp
+    
+    #error
+    def errors(self, data_h5):
+        data = np.array(data_h5['thd']['data'])[...,self.hydroTHD_index['thd']['I_EOSERR']]
+        return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
 
     #neutrinos
     def neutrino_energy_grid(self):
@@ -352,9 +358,16 @@ class SimulationAnalysis:
         data = self.magnetic_field(data_h5)
         return 0.5*(data[..., 0]**2 + data[..., 1]**2 + data[..., 2]**2)
     
-    #GWs
-    def GW_Amplitudes(self, correct_for_tob=True):
+    ##---------------------------------------------------------------------------------------
+    ## Gravitational Wavess
+    ##---------------------------------------------------------------------------------------
+
+    def GW_Amplitudes(self, correct_for_tob=True, zero_correction=True, lower_refinement=True):
         """
+        Params:
+            zero_correction: shifts up or down the amplitude to make it centred with zero
+            lower_refinement: on fine timestep refinements GWs are usually noisy, so we take 
+            one every n points. n defined as the number to reach 0.1 ms
         Returns GWs amplitudes:
         1D:
             No GWs in spherical symmetry
@@ -369,10 +382,24 @@ class SimulationAnalysis:
             Column 5: x polarization polar plane
         """
         data = load_file(self.log_path, self.grw)
+        if lower_refinement:
+            dt = data[1, 2] - data[0, 2]
+            new_dt = dt
+            n=1
+            while new_dt < 5e-5:
+                new_dt += dt
+                n += 1
+            data = data[::n, :]
+
         column_change = find_column_changing_line(self.log_path, self.grw)
-        if correct_for_tob:
+        if zero_correction:
+            index = np.argmax((data[:, 2] - self.time_of_bounce_rho())  >= -0.01)
+        else:
+            index = None
+        if correct_for_tob and zero_correction:
             data[:,2] -= self.time_of_bounce_rho()
-        return GW_strain(self.dim, column_change, data)
+        
+        return GW_strain(self.dim, column_change, data, index)
     
     def GW_dimensionless_strain(self, distance, angle = 0.5 * np.pi, correct_for_tob=True):
         """
@@ -466,98 +493,50 @@ class SimulationAnalysis:
             time: timeseries in s
             frequency: aray of the frequencies in Hz
             Zxx: magnitude
+        In 3D simulations:
+            h_pl_e, h_pl_p, h_cr_e, h_cr_p
         """
         GW_strain = self.GW_Amplitudes(correct_for_tob=False)
-        GW_strain[:, 1] *= GW_norm
+        GW_strain[:, 1:] *= GW_norm
         window = 0
         while np.abs(GW_strain[window,0] - GW_strain[0,0]) < u.convert_to_s(window_size):
             window += 1
-        fs = (GW_strain[1, 0] - GW_strain[0, 0]) ** (-1)
-        frequency, time, Zxx = stft(GW_strain[:,1], fs = fs, nperseg=window)
-        time = time / time[-1] * GW_strain[-1, 0]
+        
+        time, frequency, Zxx = GW_spectrogram(self.dim, GW_strain, window)
         if correct_for_tob:
             time -= self.time_of_bounce_rho()
-        return time, frequency, np.abs(Zxx)
+        return time, frequency, Zxx
     
-    def Deltah(self, peak:Literal['bounce', 'highest', 'second_highest'],
-               interval = [None, None], return_coordinates = False,
-               corrected_for_tob = True):
+    def Deltah(self, peak:Literal['bounce', 'highest'],
+               interval = [None, None], min_time=1.75, max_time=2, use_derivative = False, 
+               return_coordinates = False):
         """
         Returns the Delta h of the gravitational wave strain as defined in
         Richers et al. 2017 (https://arxiv.org/pdf/1701.02752.pdf).
         Basically the difference between the first maximum and minimum postbounce,
         the first peak that appears is not considered.
-        In case the highest or second_highest peaks are selected the amplitude returned is the maxima
+        In case the highest peak is selected the amplitude returned is the maxima
         between left and right.
+        min and max time are windows in which to search the low and high peaks in the strain
         Return:
             amplitude in cm
             if return coordinates
                 time, h of the highest and lowest peak
         """
-        GWs = self.GW_Amplitudes(True)
-        case_selected = 0
-        bounce_peak_index = self.__GWs_peak_indices(GWs, 'bounce', interval)
-        if peak != 'bounce':
-            peak_index = self.__GWs_peak_indices(GWs, peak, interval)
-            if np.abs(GWs[peak_index[1], 0] - GWs[bounce_peak_index[1], 0]) < u.convert_to_s(2):
-                peak_index = bounce_peak_index[1]
-                case_selected = 1
-            else:
-                peak_index = peak_index[1]
-                case_selected = 2
-        else:
-            peak_index = bounce_peak_index[1]
-            case_selected = 1
-        
-        if case_selected == 1:
-            GWs = GWs[:peak_index + 1, :]
-            dh_dt = np.flip(IDL_derivative(GWs[:, 0], GWs[:, 1]))
-            indices = dh_dt.size - 1 - np.argwhere(dh_dt[1:] * dh_dt[:-1] < 0)[:, 0]
-            for i in indices:
-                if GWs[i, 1] < 0:
-                    low_peak = i
-                    break
-        elif case_selected == 2:
-            ## check a window of 5 ms for each side
-            window = int( 10 / u.convert_to_ms( GWs[1, 0] - GWs[0, 0] ) )
-            dh_dt_right = IDL_derivative( GWs[peak_index:peak_index + window, 0], GWs[peak_index:peak_index + window, 1] )
-            indices_right = np.argwhere( dh_dt_right[1:] * dh_dt_right[:-1] < 0)[:, 0] + peak_index
-            for i in indices_right:
-                if GWs[i, 1] < 0:
-                    low_peak_right = i
-                    break
-            dh_dt_left = np.flip( IDL_derivative( GWs[peak_index - window:peak_index, 0], GWs[peak_index - window:peak_index, 1] ) )
-            indices_left = dh_dt_left.size - 1 - np.argwhere( dh_dt_left[1:] * dh_dt_left[:-1] < 0)[:, 0] + peak_index - window
-            for i in indices_left:
-                if GWs[i, 1] < 0:
-                    low_peak_left = i
-                    break
-            if np.abs( GWs[peak_index, 1] - GWs[low_peak_left, 1] ) > \
-               np.abs( GWs[peak_index, 1] - GWs[low_peak_right, 1] ):
-                low_peak = low_peak_left
-            else:
-                low_peak = low_peak_right
-        ## If no left or right peak is found Dh is 0
-        try:
-            deltah = np.abs(GWs[peak_index, 1] - GWs[low_peak, 1])
-        except:
-            deltah = 0
+        GWs = self.GW_Amplitudes()
+        indices = self.__GWs_peak_indices(GWs, peak, interval, min_time, max_time, use_derivative)
+        deltah = np.abs(GWs[indices[1], 1] - GWs[indices[2], 1])
         if return_coordinates:
-            if not corrected_for_tob:
-                GWs[:, 0] += self.time_of_bounce_rho()
-            try:
-                return deltah, [GWs[peak_index, 0], GWs[low_peak, 0]], [GWs[peak_index, 1], GWs[low_peak, 1]]
-            except:
-                if not corrected_for_tob:
-                    return deltah, [0, 0], [self.time_of_bounce_rho(), self.time_of_bounce_rho()]
-                else:
-                    return deltah, [0, 0], [0, 0]
+            x = [GWs[indices[1], 0], GWs[indices[2], 0]]
+            y = [GWs[indices[1], 1], GWs[indices[2], 1]]
+            return deltah, x, y
         else:
             return deltah
 
 
-    def GWs_peak(self, peak:Literal['bounce', 'highest', 'second_highest'] = 'bounce',
-                 interval = [None, None], return_time = False):
+    def GWs_peak(self, peak:Literal['bounce', 'highest'] = 'bounce',
+                 interval = [None, None], min_time=1.75, max_time=2, use_der=False,
+                 return_time = False):
         """
         This method calculate the value of the GWs strain peak and its position in time
         Return:
@@ -566,13 +545,14 @@ class SimulationAnalysis:
             time, peak
         """
         GWs = self.GW_Amplitudes(True)
-        indices = self.__GWs_peak_indices(GWs, peak, interval)
+        indices = self.__GWs_peak_indices(GWs, peak, interval, min_time, max_time, use_der)
         if return_time:
             return GWs[indices[1], 0], GWs[indices[1], 1]
         else:
             return GWs[indices[1], 1]
 
-    def GWs_fourier_transform(self, peak:Literal['bounce', 'highest', 'second_highest'] = 'bounce',
+    def GWs_fourier_transform(self, peak:Literal['bounce', 'highest'] = 'bounce',
+                              min_time=1.75, max_time=2, use_der=False,
                               interval = [None, None]):
         """
         Method that calculates the fourier transform of a specific GWs peak.
@@ -582,10 +562,11 @@ class SimulationAnalysis:
             fourier transformed strain x sqrt{frequency}
         """
         GWs = self.GW_Amplitudes(True)
-        indices = self.__GWs_peak_indices(GWs, peak, interval)
+        indices = self.__GWs_peak_indices(GWs, peak, interval, min_time, max_time, use_der)
         return self.__GWs_fourier_transform(GWs, indices)
     
-    def GWs_peak_frequencies(self, peak:Literal['bounce', 'highest', 'second_highest'] = 'bounce',
+    def GWs_peak_frequencies(self, peak:Literal['bounce', 'highest'] = 'bounce',
+                              min_time=1.75, max_time=2, use_der=False,
                               interval = [None, None], return_intensities = False, return_fourier = False):
         """
         Calculates the dominant and the second dominant frequency of a GWs peak
@@ -597,7 +578,7 @@ class SimulationAnalysis:
                 frequencies array
                 htilde
         """
-        frequency, htilde = self.GWs_fourier_transform(peak, interval)
+        frequency, htilde = self.GWs_fourier_transform(peak, min_time, max_time, use_der, interval)
         indices = self.__GWs_frequency_peak_indices(frequency, htilde)
         return_list = [frequency[indices]]
         if return_intensities:
@@ -609,107 +590,67 @@ class SimulationAnalysis:
         return return_list
             
 
-    def __GWs_peak_indices(self, GWs, peak, interval):
+    def __GWs_peak_indices(self, GWs, peak, interval, min_time, max_time, use_der):
         """
-        Method that finds the coordinates of the one of a specific peak of the GWs strain as well as 
+        Method that finds the coordinates of the minimum and maximum peak of the GWs strain as well as 
         the coordinates of the points before and after the oscillation. Namely the latter are the
         first intersection point with the x axis after the peak and the third one before it.
         Parameters:
-            peak: which peak to find, can be the bounce peak, highest or second highest in an interval
+            peak: which peak to find, can be the bounce peak, highest in an interval
             interval: interval (in ms) in which the peak has to be found, if only one value is provided, that
                     would be used as the right hand side
         Returns:
             list containing left index, peak index, right index
         """
-        
-        ## CUT THE DATA
-        if type(interval) != list:
-            interval = [interval]
-        assert len(interval) <= 2, "Interval MUST contain at most 2 values"
-        interval = [u.convert_to_s(i) if i is not None else i for i in interval]
-        index_start = 0
-        if peak != 'bounce':
-            if len(interval) == 1:
-                if interval[0] is not None:
-                    assert max(interval) <= GWs[:, 0].max(), "Interval values are out of range"
-                    index_end = np.argmax(GWs[:, 0] >= interval[0])
-                    GWs = GWs[:index_end, :]
-                else:
-                    pass
-            elif len(interval) == 2:
-                if interval == [None, None]:
-                    pass
-                elif interval[0] == None:
-                    assert interval[1] <= GWs[:, 0].max(), "Interval values are out of range"
-                    index_end = np.argmax(GWs[:, 0] >= interval[1])
-                    GWs = GWs[:index_end, :]
-                elif interval[1] == None:
-                    assert interval[0] >= GWs[:, 0].min(), "Interval values are out of range"
-                    index_start = np.argmax(GWs[:, 0] >= interval[0])
-                    GWs = GWs[index_start:, :]
-                else:
-                    assert interval[0] >= GWs[:, 0].min() and interval[1] <= GWs[:, 0].max(), "Interval values are out of range"
-                    index_start =  np.argmax(GWs[:, 0] >= interval[0])
-                    index_end = np.argmax(GWs[:,0] >= interval[1])
-                    GWs = GWs[index_start:index_end, :]
-        ## DERIVE THE DATA
-        dGWs_dt = IDL_derivative(GWs[:, 0], GWs[:, 1])
-        sign = dGWs_dt[1:] * dGWs_dt[:-1]
-        sign_strain = GWs[1:, 1] * GWs[:-1, 1]
-        #find the indices at
+        zeros = np.where(GWs[:-1, 1] * GWs[1:, 1] < 0 )[0] + 1
         if peak == 'bounce':
-            ## Find the left peak as the first time the strain chenges goes below 0
-            bounce_index = np.argmax( GWs[:, 0] >= 0 )
-            left_index = np.argmax(GWs[:,1] >= 0) #bounce_index - np.argmax( np.flip( GWs[:bounce_index, 1] ) <= 0 )
-            ## find the peak
-            index_beginning_peak = left_index
-            ## To minimize the error we start to look for the bounce peak 2 ms before the bounce
-            if GWs[index_beginning_peak, 0] < -u.convert_to_s(2):
-                index_beginning_peak = np.argmax( GWs[:, 0] >= -u.convert_to_s(2))
-            peak_index = np.argwhere( sign[index_beginning_peak + 1:] <= 0)[:, 0] + index_beginning_peak + 1
-            bounce_passed = False
-            for index in peak_index:
-                if GWs[index, 1] > 0 and not bounce_passed:
-                    bounce_passed = True
-                elif GWs[index, 1] > 0 and bounce_passed:
-                    peak_index = index
-                    break
-            #find right index
-            right_index = np.argmax(sign_strain[peak_index:] < 0) + peak_index + 1
-        elif peak == 'highest' or peak == 'second_highest':
-            ## Find the peak
-            peak_index = np.argmax(GWs[:, 1])
-            if peak == 'second_highest':
-                peak_indices = np.argwhere(sign <= 0)[:, 0]
-                second_peak = 0
-                for index in peak_indices:
-                    if np.abs(GWs[index, 0] - GWs[peak_index, 0]) <= u.convert_to_s(2) or \
-                        GWs[index, 0] <= u.convert_to_s(2) or \
-                        GWs[index, 1] <= 0:
-                        continue
-                    elif GWs[index, 1] > GWs[second_peak, 1]:
-                            second_peak = index
-                peak_index = second_peak
-
-            ## find right index
-            right_index = np.argmax(sign_strain[peak_index:] < 0) + peak_index + 1
-            ## find left index
-            left_index = peak_index - np.argwhere(np.flip(sign[:peak_index]))[:, 0]
-            passed_min = False
-            for index in left_index:
-                if GWs[index, 1] > 0 and passed_min:
-                    left_index = index
-                    break
-                elif GWs[index, 1] < 0 and not passed_min:
-                    passed_min = True
-            if left_index.size > 1:
-                left_index = 0
+            ## FIND the bounce time
+            bounce_index = np.argmax(GWs[:, 0] >= 0)
+            ## FIND the min in the 1.5 ms after the bounce
+            index_after_bounce = np.argmax(GWs[:,0] >= u.convert_to_s(min_time)) + 1
+            x_min = np.argmin(GWs[bounce_index:index_after_bounce, 1]) + bounce_index
+            ##FIND MAX AFTER the min in 1.5 ms
+            index2_after_bounce = index_after_bounce = np.argmax(GWs[:,0] >= GWs[x_min, 0] + u.convert_to_s(max_time)) + 1
+            
+            if use_der:
+                x_max = 0
+                derivative = IDL_derivative(GWs[x_min:index2_after_bounce+1, 0], GWs[x_min:index2_after_bounce+1, 1])
+                flex_points = np.where((derivative[1:] * derivative[:-1] < 0))[0] + x_min
+            
+                for i in range(flex_points.size):
+                    
+                    if GWs[flex_points[i], 1] > 0 and GWs[flex_points[i+1], 1] < 0:
+                        x_max = flex_points[i]
+                        break
             else:
-                left_index = left_index - np.argmax ( np.flip( sign_strain[:left_index] ) < 0) - 1
-
-        return [left_index + index_start,
-                peak_index + index_start,
-                right_index + index_start]
+                x_max = np.argmax(GWs[x_min:index2_after_bounce, 1]) + x_min
+        elif peak == 'highest':
+            ## CUT the GWS
+            if interval[0] is not None:
+                start_index = np.argmax(GWs[:, 0] >= u.convert_to_s(interval[0]))
+                GWs = GWs[start_index:, :]
+            else:
+                start_index = None
+            if interval[1] is not None:
+                GWs = GWs[:np.argmax(GWs[:, 0] >= u.convert_to_s(interval[1])), :]
+            ## FIND the peak
+            x_max = np.argmax(GWs[:, 1])
+            ## FIND the min
+            min_index = np.argmax(GWs[:, 0] >= GWs[x_max, 0] - u.convert_to_s(max_time))
+            x_min = np.argmin(GWs[min_index:np.argmax(GWs[:, 0] >= GWs[x_max, 0] + u.convert_to_s(max_time)), 1]) + min_index
+            if start_index is not None:
+                x_min += start_index
+                x_max += start_index
+        ## Find the beginning and end of the peak
+        if x_max > x_min:
+            zeros_end_index = np.argmax(zeros>x_max)
+            end_index = zeros[zeros_end_index]
+            start_index = zeros[np.argmax(zeros>x_min) - 4]
+        elif x_max < x_min:
+            zeros_end_index = np.argmax(zeros>x_min)
+            end_index = zeros[zeros_end_index]
+            start_index = zeros[np.argmax(zeros>x_max) - 4]
+        return start_index, x_min, x_max, end_index
 
     def __GWs_fourier_transform(self, GWs, indices):
         """
@@ -1845,3 +1786,27 @@ class SimulationAnalysis:
                 data_out[i, m_index] = radius[np.argmax(mass >= tot_mass)]
                 tot_mass += mass_step
         return data_out
+    
+    def bounce_compactness(self, mass = None):
+        """
+        Compactness parameter as defined in O'Connor 2011  
+        `10.1088/0004-637X/730/2/72`
+        It returns the compacteness at bounce (maximum compactness of
+        the core) for the model. 
+        If a mass at which the compactness has to be provided is specified
+        it will return just a value
+        """
+        bounce_file = self.find_file_from_time(0, True)
+        data_h5 = self.open_h5(bounce_file)
+        rho = self.rho(data_h5)
+        radius = u.convert_to_km(self.cell.radius(self.ghost)) / 1000
+        dV = self.cell.dVolume_integration(self.ghost)
+        self.close_h5(data_h5)
+        if self.dim > 1:
+            enclosed_mass = np.sum( rho * dV, axis = tuple(range( self.dim - 1) ) )
+        enclosed_mass = u.convert_to_solar_masses( np.cumsum(enclosed_mass) )
+        compactness = enclosed_mass / radius
+        if mass is not None:
+            return compactness[ np.argmax( enclosed_mass >= mass ) ]
+        else:
+            return compactness
