@@ -43,7 +43,7 @@ class cell:
    
     def radius_right(self, ghost):
         """
-        Method that returns an array with the 'righ' coordinates of the radius, with the 
+        Method that returns an array with the 'right' coordinates of the radius, with the 
         selected number of ghost cells
         Parameters:
             ghost: (object) ghost
@@ -317,4 +317,3 @@ class cell:
     
     def dOmega(self, ghost):
         return self.dtheta_integration(ghost) * self.dphi(ghost)
-
