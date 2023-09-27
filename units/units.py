@@ -8,6 +8,7 @@ class units:
         self.MeV = 1.360218e-6 #erg
         self.km = 1e5 #cm
         self.ms = 1e-3 #s
+        self.G = 6.67e-8#cm^3/(g*s^2)
 
     def convert_to_solar_masses(self, quantity):
         return quantity / self.solar_mass
