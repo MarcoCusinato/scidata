@@ -97,7 +97,7 @@ class ghost:
             else:
                 return self.__remove_ghost_cells_3D_ar_1D_sim(array)
         elif dim == 2:
-            if array_dim not in (1, 2, 3, 4):
+            if array_dim not in (1, 2, 3, 4, 5):
                 raise TypeError("Array MUST be 1, 2, 3 or 4D")
             if array_dim == 1:
                 if not quantity_1D in ['radius', 'theta']:
@@ -107,8 +107,10 @@ class ghost:
                 return self.__remove_2D_ghost_cells(array)
             elif array_dim == 3:
                 return self.__remove_ghost_cells_3D_ar_2D_sim(array)
-            else:
+            elif array_dim == 4:
                 return self.__remove_ghost_cells_4D_ar_2D_sim(array)
+            else:
+                return self.__remove_ghost_cells_5D_ar_2D_sim(array)
         else:
             if array_dim not in (1, 3, 4, 5):
                 raise TypeError("Array MUST be 1, 3, 4 or 5D")
@@ -202,6 +204,14 @@ class ghost:
                      self.r_l : size_x - self.r_r,
                      :, :]
 
+    def __remove_ghost_cells_5D_ar_2D_sim(self, array):
+        assert array.ndim == 5, "Array must be 4-dimensional"
+        size_y = array.shape[0]
+        size_x = array.shape[1]
+        return array[self.t_l : size_y - self.t_r, 
+                     self.r_l : size_x - self.r_r,
+                     ...]
+    
     def __remove_ghost_cells_4D_ar_3D_sim(self, array):
         assert array.ndim == 4, "Array must be 4-dimensional"
         size_z = array.shape[0]
