@@ -529,7 +529,7 @@ class SimulationAnalysis:
         if return_coordinates:
             x = [GWs[indices[1], 0], GWs[indices[2], 0]]
             y = [GWs[indices[1], 1], GWs[indices[2], 1]]
-            return deltah, x, y
+            return deltah, np.array(x), np.array(y)
         else:
             return deltah
 
