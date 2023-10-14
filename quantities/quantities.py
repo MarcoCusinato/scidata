@@ -1348,9 +1348,10 @@ class SimulationAnalysis:
         return u.convert_to_solar_masses(np.cumsum(rho))
     
     def get_masses_and_energies(self, time = False, PNS_mass = False, PNS_mag_ene = False,
-                        PNS_rot_ene = False, PNS_pol_kin_ene = False, ejected_mass = False, 
-                        explosion_energy = False, gain_mass = False, gain_heating = False,
-                        mass_accretion_500km = False, tob_corrected = True, name = 'mass_energy'):
+                        PNS_rot_ene = False, PNS_pol_kin_ene = False, PNS_conv_ene= False, 
+                        ejected_mass = False, explosion_energy = False, gain_mass = False, 
+                        gain_heating = False, mass_accretion_500km = False, tob_corrected = True, 
+                        name = 'mass_energy'):
         path = os.path.join(self.storage_path, name + '.h5')
         if not os.path.exists(path):
             warnings.warn(name + " file does not exists. Creating one now.")
@@ -1373,6 +1374,8 @@ class SimulationAnalysis:
             quantities_list.append(np.array(data['PNS_rot_ene']))
         if PNS_pol_kin_ene:
             quantities_list.append(np.array(data['PNS_pol_kin_ene']))
+        if PNS_conv_ene:
+            quantities_list.append(np.array(data['PNS_convec_ene']))
         if ejected_mass:
             quantities_list.append(np.array(data['ejected_mass']))
         if explosion_energy:
@@ -1481,6 +1484,7 @@ class SimulationAnalysis:
         file_out.create_dataset('PNS_pol_kin_ene', data = PNS[:, 2])
         file_out.create_dataset('PNS_rot_ene', data = PNS[:, 3])
         file_out.create_dataset('PNS_mag_ene', data = PNS[:, 4])
+        file_out.create_dataset('PNS_convec_ene', data = PNS[:, 5])
         file_out.create_dataset('mass_accr_500km', data = mass_accretion)
         file_out.create_dataset('ejected_mass', data = unbound[:, 1])
         file_out.create_dataset('explosion_ene', data = unbound[:, 0])
@@ -1535,7 +1539,7 @@ class SimulationAnalysis:
     def __PNS_energies_and_mass(self, tob_corrected):
         dV = self.cell.dVolume_integration(self.ghost)
         file_list = self.file_list_hdf()
-        data_out = np.zeros((len(file_list), 5))
+        data_out = np.zeros((len(file_list), 6))
         PNS_radius, indices, data_out[:, 0], ghost_cells = self.get_PNS_radius(PNS_radius = True,
                                            indices = True, ret_time = True, ghost_cells = True,
                                            tob_corrected = tob_corrected)
@@ -1549,6 +1553,7 @@ class SimulationAnalysis:
             rho = self.rho(data_h5) * PNS * dV
             if self.dim > 1:
                 rot_energy = rho * self.phi_velocity(data_h5) ** 2
+                conv_energy = rho * self.theta_velocity(data_h5) ** 2
                 kin_energy = rho * (self.radial_velocity(data_h5) ** 2 \
                             + self.theta_velocity(data_h5) ** 2)
                 mag_energy = self.magnetic_energy_per_unit_volume(data_h5) * PNS * dV
@@ -1560,6 +1565,7 @@ class SimulationAnalysis:
             data_out[index, 2] = kin_energy.sum()
             data_out[index, 3] = rot_energy.sum()
             data_out[index, 4] = mag_energy.sum()
+            data_out[index, 5] = conv_energy.sum()
             self.close_h5(data_h5)
         data_out[:, 1] = u.convert_to_solar_masses(data_out[:, 1])
         return data_out
