@@ -382,6 +382,7 @@ class SimulationAnalysis:
             Column 5: x polarization polar plane
         """
         data = load_file(self.log_path, self.grw)
+        """
         if lower_refinement:
             dt = data[1, 2] - data[0, 2]
             new_dt = dt
@@ -390,7 +391,7 @@ class SimulationAnalysis:
                 new_dt += dt
                 n += 1
             data = data[::n, :]
-
+        """
         column_change = find_column_changing_line(self.log_path, self.grw)
         if zero_correction:
             index = np.argmax((data[:, 2] - self.time_of_bounce_rho())  >= -0.01)
@@ -956,7 +957,7 @@ class SimulationAnalysis:
                 cs2 = self.speed_of_sound(data_h5).mean(axis = tuple(range(self.dim - 1))) ** 2
                 pgas =  self.gas_pressure(data_h5).mean(axis = tuple(range(self.dim - 1)))
                 rho = self.rho(data_h5).mean(axis = tuple(range(self.dim - 1)))
-                phi = self.rho(data_h5).mean(axis = tuple(range(self.dim - 1)))
+                phi = self.grav_pot(data_h5).mean(axis = tuple(range(self.dim - 1)))
                 omega_BV[:, i] = ( 1 / cs2 * IDL_derivative( radius, pgas ) - IDL_derivative( radius, rho )) * IDL_derivative( radius, phi ) / rho
         return time - self.time_of_bounce_rho(), radius, omega_BV 
 
