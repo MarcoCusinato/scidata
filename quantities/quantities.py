@@ -28,6 +28,7 @@ from scidata.paths.path_managment import find_simulation
 from scidata.platform.platform import local_storage_folder, pltf
 from scidata.GWs_strain.GWs import GW_strain
 from scidata.GWs_strain.spectrogram import GW_spectrogram
+from scidata.GWs_strain.AE220 import calculate_AE220
 
 u = units()
 
@@ -50,15 +51,21 @@ class SimulationAnalysis:
         self.ghost = gh(self.ghost_cells)
         self.storage_path = local_storage_folder(platform, simulation_name, self.dim)
     
-    #h5 methods
-    def open_h5(self, file_name):
+    ##---------------------------------------------------------------------------------------
+    ## HDF methods
+    ##---------------------------------------------------------------------------------------
+
+    def open_h5(self, file_name, mode = 'r'):
         file_path = os.path.join(self.hdf_path, file_name)
-        return h5py.File(file_path)
+        return h5py.File(file_path, mode)
     
     def close_h5(self, data_h5):
         data_h5.close()
     
-    #hydro quatities
+    ##---------------------------------------------------------------------------------------
+    ## Hydro quantities
+    ##---------------------------------------------------------------------------------------
+
     def rho(self, data_h5):
         data = np.array(data_h5['hydro']['data'])[:,:,:,self.hydroTHD_index['hydro']['I_RH']]
         return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
@@ -73,7 +80,10 @@ class SimulationAnalysis:
         rho = self.rho(data_h5)
         return data/rho
     
-    #thd quatities
+    ##---------------------------------------------------------------------------------------
+    ## Thermodinamical quantities
+    ##---------------------------------------------------------------------------------------
+
     def gas_pressure(self, data_h5):
         data = np.array(data_h5['thd']['data'])[:,:,:,self.hydroTHD_index['thd']['I_PGAS']]
         return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
@@ -195,7 +205,10 @@ class SimulationAnalysis:
         data = np.array(data_h5['thd']['data'])[...,self.hydroTHD_index['thd']['I_EOSERR']]
         return self.ghost.remove_ghost_cells(np.squeeze(data), self.dim)
 
-    #neutrinos
+    ##---------------------------------------------------------------------------------------
+    ## Neutrinos
+    ##---------------------------------------------------------------------------------------
+
     def neutrino_energy_grid(self):
         bin_energies = np.loadtxt(os.path.join(self.grid_path, self.nu_e_grid))
         return bin_energies[:,2]
@@ -318,7 +331,10 @@ class SimulationAnalysis:
     def average_phi_velocity_profile(self, data_h5):
         return average_profile(self.dim, self.phi_velocity(data_h5))
 
-    #magnetic fields
+    ##---------------------------------------------------------------------------------------
+    ## Magnetic fields
+    ##---------------------------------------------------------------------------------------
+
     def magnetic_field_ct(self, data_h5):
         """
         Magnetic field at the cells border, to use only to calculate streamlines.
@@ -433,56 +449,46 @@ class SimulationAnalysis:
             radius
             time: array of time step
             AE220: len(radius), len(time) array
+            full_strain: GWs strain from the full star
+            inner_strain: GWs strain from the PNS nucleus
+            convection_strain: GWs strain from the convection region
+            outer_strain: GWs strain from the outer layers
         """
         AE220_file = os.path.join(self.storage_path,'AE220.h5')
+        const = -0.125 *  np.sqrt(15/np.pi)
         if not os.path.exists(AE220_file):
             warnings.warn("AE220 file not found. Creating one. \nPlease wait...")
-            time, AE220 = self.__AE220()
+            time, AE220, full_strain, inner_strain, \
+            convection_strain, outer_strain = calculate_AE220(self)
             AE220_hdf = h5py.File(AE220_file, 'w')
             AE220_hdf.create_dataset('time', data = time)
             AE220_hdf.create_dataset('AE220', data = AE220)
+            AE220_hdf.create_dataset('h_full_strain', data = full_strain * const)
+            AE220_hdf.create_dataset('h_inner_strain', data = inner_strain * const)
+            AE220_hdf.create_dataset('h_convection_strain', data = convection_strain * const)
+            AE220_hdf.create_dataset('h_outer_strain', data = outer_strain * const)
             AE220_hdf.close()
         data = self.open_h5(AE220_file)
         time = data["time"][...]
         AE220 = data["AE220"][...]
+        full_strain = data["h_full_strain"][...]
+        inner_strain = data["h_inner_strain"][...]
+        convection_strain = data["h_convection_strain"][...]
+        outer_strain = data["h_outer_strain"][...]
         self.close_h5(data)
-        const = -0.125 *  np.sqrt(15/np.pi)
+        
         if not correct_for_tob:
             time += self.time_of_bounce_rho()
-        return self.cell.radius(self.ghost), time, AE220 * const
+        return self.cell.radius(self.ghost), time, AE220 * const, \
+                full_strain, inner_strain, convection_strain, outer_strain
 
-
-    def __AE220(self):
+    def GWs_dE_dt(self, correct_for_tob = True):
         """
-        Calculates the AE220 from density and velocities for a
-        2D simulation.
-        ONLY 2D
-        Returns
-            time: arry of time step
-            AE220: len(radius), len(time) array
+        Returns the GWs energy loss per unit time
         """
-        radius = self.cell.radius(self.ghost)
-        dV = -self.cell.dVolume_integration(self.ghost)
-        costheta = np.cos(self.cell.theta(self.ghost))
-        file_list = self.file_list_hdf()
-        time = np.zeros(len(file_list))
-        NE220 = np.zeros((len(radius), len(time)))
-        radius = radius[None, ...]
-        costheta = costheta[..., None]
-        for index in range(len(file_list)):
-            data_h5 = self.open_h5(file_list[index])
-            rho = self.rho(data_h5)
-            vR = self.radial_velocity(data_h5)
-            vT = self.theta_velocity(data_h5)
-            time[index] = self.time(data_h5)
-            self.close_h5(data_h5)
-            NE220[:, index] = np. sum( dV * radius * rho *  ( vR * \
-                ( 3 * costheta ** 2 - 1 ) - 3 * vT * costheta * np.sqrt( 1 - costheta ** 2 ) ), 
-                axis = 0 )
-        NE220 *= ( u.G * 16 * np.pi ** 0.5 / (np.sqrt( 15 ) * u.speed_light ** 4 ) )
-            
-        return time - self.time_of_bounce_rho(), IDL_derivative(time, NE220)
-        
+        GWs = self.GW_Amplitudes(correct_for_tob)
+        GWs[:, 1] = u.speed_light ** 3 / u.G * 2 / 15 * GWs[:,1] ** 2
+        return GWs
     
     def GW_spectrogram(self, window_size = 10, GW_norm = 1, correct_for_tob = True):
         """
@@ -533,7 +539,6 @@ class SimulationAnalysis:
             return deltah, np.array(x), np.array(y)
         else:
             return deltah
-
 
     def GWs_peak(self, peak:Literal['bounce', 'highest'] = 'bounce',
                  interval = [None, None], min_time=1.75, max_time=2, use_der=False,
@@ -590,7 +595,6 @@ class SimulationAnalysis:
             return return_list[0]
         return return_list
             
-
     def __GWs_peak_indices(self, GWs, peak, interval, min_time, max_time, use_der):
         """
         Method that finds the coordinates of the minimum and maximum peak of the GWs strain as well as 
@@ -656,25 +660,22 @@ class SimulationAnalysis:
     def __GWs_fourier_transform(self, GWs, indices):
         """
         This method applies FFT to a small portion of the GW strain to find the domiunant frequency of a specific
-        obsillation
+        oscillation
         Returns
             positive frequency range
             $\tilde{h} * \sqrt{freq}$
         """
         dt = np.abs(GWs[1, 0] - GWs[0, 0])
         ## Cut the GWs signal
-        strain = np.zeros(11000)
+        strain = np.zeros(10000)
         ## Pad the strain with zeros to increase the resolution
         if (GWs[indices[0]:indices[-1], 1]).size < 11000:
-            strain[11000 - (GWs[indices[0]:indices[-1], 1]).size:] = GWs[indices[0]:indices[-1], 1]
+            strain[10000 - (GWs[indices[0]:indices[-1], 1]).size:] = GWs[indices[0]:indices[-1], 1]
         else:
             strain = GWs[indices[0]:indices[-1], 1]
-        #find the frequencies
-        freq = fftfreq(strain.size, dt)
-        #freq = np.where(freq < 0, 0, freq)
-        dft = np.abs(fft(strain)) * np.sqrt(freq)
-        dft = np.where(freq > 0, dft, 0)
-        freq = np.where(freq < 0, 0, freq)
+        ## Find the frequencies
+        freq = fftfreq(strain.size, dt)[:strain.size//2]
+        dft = np.abs(fft(strain))[:strain.size//2] * np.sqrt(freq)
         return freq, dft
 
     def __GWs_frequency_peak_indices(self, frequency, htilde):
@@ -686,20 +687,120 @@ class SimulationAnalysis:
         """
         dhtilde_df = IDL_derivative(frequency, htilde)
         sign = dhtilde_df[1:] * dhtilde_df[:-1]
-        ## FInd the peak frequency of the strain
-        peak_frequency_index = np.argmax(htilde)
-
-
-        ## find derivative sign change
-        indices = np.argwhere( sign < 0)[:, 0]
+        ## Find extrema points
+        extr = np.where(sign < 0)[0]
+        ## Find the two peaks
+        first_peak_index = 0
         second_peak_index = 0
-        for index in indices:
-            if ( htilde[index] > htilde[second_peak_index] and \
-                htilde[index] < htilde[peak_frequency_index] and \
-                np.abs( frequency[index] - frequency[peak_frequency_index] ) > 10 and \
-                frequency[index] > 200 ):
+        for index in extr:
+            if htilde[index] > htilde[first_peak_index]:
+                second_peak_index = first_peak_index
+                first_peak_index = index
+            elif htilde[index] > htilde[second_peak_index]:
                 second_peak_index = index
-        return [peak_frequency_index, second_peak_index]
+    
+        return [first_peak_index, second_peak_index]
+
+    ##---------------------------------------------------------------------------------------
+    ## Convection
+    ##---------------------------------------------------------------------------------------
+
+    def Rossby_number(self):
+        """
+        Derive the Rossby number in the convective layer of the PNS
+        """
+        inner_radius, indices, time, gh_inner = self.get_innercore_radius(innercore_radius=True, indices=True, 
+                                                                ret_time=True, ghost_cells=True)
+        convective_radius, gh_conv = self.get_convective_radius(convective_radius=True,
+                                                                ghost_cells=True)
+        files = self.file_list_hdf()
+        radius = self.cell.radius(self.ghost)
+        if self.dim < 3:
+            sinphi = 2
+        else:
+            sinphi = 2 * np.sin(self.cell.theta(self.ghost))
+        Ro = []
+        Ro_rot = []
+        Ro_conv = []
+
+        for (f, i) in zip(files, indices):
+            try:
+                data = self.open_h5(f)
+            except:
+                Ro.append(Ro[-1])
+                Ro_rot.append(Ro_rot[-1])
+                Ro_conv.append(Ro_conv[-1])
+                continue
+            mask = ( radius >= self.ghost.remove_ghost_cells_radii(convective_radius[..., i], self.dim, **gh_conv)[..., None] ) \
+                & ( radius <= self.ghost.remove_ghost_cells_radii(inner_radius[..., i], self.dim, **gh_inner)[..., None] )
+            rmf_veloccity = np.sqrt(self.phi_velocity(data)[mask] ** 2 + self.theta_velocity(data)[mask] ** 2 + \
+                self.radial_velocity(data)[mask] ** 2)
+            rmf_veloccity = np.average( (rmf_veloccity - rmf_veloccity.mean(axis=tuple(range(self.dim - 1)))) ** 2,
+                                       axis=tuple(range(self.dim - 1)) ) ** 0.5
+            rho = self.rho(data)
+            omega = (self.omega(data) * sinphi)[mask].mean(axis=tuple(range(self.dim - 1)))
+            H_rho = np.abs( 1 / (IDL_derivative(radius, rho) / rho))[mask].mean(axis=tuple(range(self.dim - 1)))
+            Ro_conv.append( np.mean( rmf_veloccity / (H_rho) ) )
+            Ro_rot.append( np.mean( omega ) ) 
+            Ro.append( np.mean( rmf_veloccity / (omega * H_rho) ) )
+        return np.stack((time, np.array(Ro_rot), np.array(Ro_conv), np.array(Ro))).T 
+
+    def BV_frequency(self, data_h5):
+        """
+        Returns the Brunt-Väisälä frequency for a specific timestep
+        """
+        
+        omega_BV = ( 1 / self.speed_of_sound(data_h5) ** 2 * IDL_derivative( self.cell.radius(self.ghost), self.gas_pressure(data_h5) ) - \
+            IDL_derivative( self.cell.radius(self.ghost), self.rho(data_h5) ) ) * IDL_derivative( self.cell.radius(self.ghost), self.grav_pot(data_h5) ) / self.rho(data_h5)
+        return omega_BV
+    
+    def BV_frequency_profile(self, tob_corrected = True):
+        """
+        Calculates the Brunt-Väisälä frequency and returns three arrays
+        time: array of time steps
+        radius: array of radial distance from tne center
+        omega_BV: array of len(radius) x len(time) containing the angular averaged BV frequency 
+        """
+        BV_file = os.path.join(self.storage_path, 'BV_frequency.h5')
+        if not os.path.exists(BV_file):
+            warnings.warn("BV frequency file not found. Creating one...\n" + \
+                          "Please wait...")
+            time, radius, omega_BV = self.__BV_frequency_profile()
+            file_h5 = h5py.File(BV_file, 'w')
+            file_h5.create_dataset("time", data=time)
+            file_h5.create_dataset("radius", data=radius)
+            file_h5.create_dataset("BV_frequency", data=omega_BV)
+            file_h5.create_dataset("ToB_corrected", data=True)
+            file_h5.close()
+        data = self.open_h5(BV_file)
+        time = data["time"][...]
+        omega_BV = data["BV_frequency"][...]
+        radius = data["radius"][...]
+        if not tob_corrected:
+            time += self.time_of_bounce_rho()
+        return time, radius, omega_BV
+
+    def __BV_frequency_profile(self):
+        """
+        Returns the Brunt-Väisälä frequency radial profile, using the angular averaged quantities
+        """
+        file_list_hdf = self.file_list_hdf()
+        radius = self.cell.radius(self.ghost)
+        indices = np.arange(len(file_list_hdf))
+        omega_BV = np.zeros((len(radius), len(file_list_hdf)))
+        time = np.zeros(len(file_list_hdf))
+        for (file, i) in zip(file_list_hdf, indices):
+            data_h5 = self.open_h5(file)
+            time[i] = self.time(data_h5)
+            if self.dim == 1:
+               omega_BV[:, i] = self.BV_frequency(data_h5)
+            else:
+                cs2 = self.speed_of_sound(data_h5).mean(axis = tuple(range(self.dim - 1))) ** 2
+                pgas =  self.gas_pressure(data_h5).mean(axis = tuple(range(self.dim - 1)))
+                rho = self.rho(data_h5).mean(axis = tuple(range(self.dim - 1)))
+                phi = self.grav_pot(data_h5).mean(axis = tuple(range(self.dim - 1)))
+                omega_BV[:, i] = ( 1 / cs2 * IDL_derivative( radius, pgas ) - IDL_derivative( radius, rho )) * IDL_derivative( radius, phi ) / rho
+        return time - self.time_of_bounce_rho(), radius, omega_BV 
     
     #misc from h5 file: grav pot, time
     def grav_pot(self, data_h5):
@@ -733,19 +834,13 @@ class SimulationAnalysis:
         """
         if time_in_ms:
             time_to_find = u.convert_to_s(time_to_find)
-        if tob is not False:
-            time_to_find += self.time_of_bounce_rho()
+        
         file_list = self.file_list_hdf()
-        for (file, file_index) in zip(file_list, range(len(file_list))):
-            data_file = self.open_h5(file)
-            time = self.time(data_file)
-            if time>=time_to_find:
-                self.close_h5(data_file)
-                if return_index:
-                    return file, file_index
-                return file
-            self.close_h5(data_file)
-        return None
+        time = self.get_PNS_radius(ret_time=True, tob_corrected=tob)
+        if return_index:
+            index = np.argmax(time>=time_to_find)
+            return file_list[index], index
+        return file_list[np.argmax(time>=time_to_find)]
 
     #time points computation: time of bounce and of BH
     def time_of_bounce(self):
@@ -903,80 +998,36 @@ class SimulationAnalysis:
         if corrected_by_tob:
             en[:,2] -= self.time_of_bounce_rho()
         return np.stack((en[:, 2], en[:, 3]), axis = 1)
-
-    def BV_frequency(self, data_h5):
-        """
-        Returns the Brunt-Väisälä frequency for a specific timestep
-        """
-        
-        omega_BV = ( 1 / self.speed_of_sound(data_h5) ** 2 * IDL_derivative( self.cell.radius(self.ghost), self.gas_pressure(data_h5) ) - \
-            IDL_derivative( self.cell.radius(self.ghost), self.rho(data_h5) ) ) * IDL_derivative( self.cell.radius(self.ghost), self.grav_pot(data_h5) ) / self.rho(data_h5)
-        return omega_BV
     
-    def BV_frequency_profile(self, tob_corrected = True):
-        """
-        Calculates the Brunt-Väisälä frequency and returns three arrays
-        time: array of time steps
-        radius: array of radial distance from tne center
-        omega_BV: array of len(radius) x len(time) containing the angular averaged BV frequency 
-        """
-        BV_file = os.path.join(self.storage_path, 'BV_frequency.h5')
-        if not os.path.exists(BV_file):
-            warnings.warn("BV frequency file not found. Creating one...\n" + \
-                          "Please wait...")
-            time, radius, omega_BV = self.__BV_frequency_profile()
-            file_h5 = h5py.File(BV_file, 'w')
-            file_h5.create_dataset("time", data=time)
-            file_h5.create_dataset("radius", data=radius)
-            file_h5.create_dataset("BV_frequency", data=omega_BV)
-            file_h5.create_dataset("ToB_corrected", data=True)
-            file_h5.close()
-        data = self.open_h5(BV_file)
-        time = data["time"][...]
-        omega_BV = data["BV_frequency"][...]
-        radius = data["radius"][...]
-        if not tob_corrected:
-            time += self.time_of_bounce_rho()
-        return time, radius, omega_BV
-
-    def __BV_frequency_profile(self):
-        """
-        Returns the Brunt-Väisälä frequency radial profile, using the angular averaged quantities
-        """
-        file_list_hdf = self.file_list_hdf()
+    def PNS_angular_momentum(self):
         radius = self.cell.radius(self.ghost)
-        indices = np.arange(len(file_list_hdf))
-        omega_BV = np.zeros((len(radius), len(file_list_hdf)))
-        time = np.zeros(len(file_list_hdf))
-        for (file, i) in zip(file_list_hdf, indices):
-            data_h5 = self.open_h5(file)
-            time[i] = self.time(data_h5)
-            if self.dim == 1:
-               omega_BV[:, i] = self.BV_frequency(data_h5)
-            else:
-                cs2 = self.speed_of_sound(data_h5).mean(axis = tuple(range(self.dim - 1))) ** 2
-                pgas =  self.gas_pressure(data_h5).mean(axis = tuple(range(self.dim - 1)))
-                rho = self.rho(data_h5).mean(axis = tuple(range(self.dim - 1)))
-                phi = self.grav_pot(data_h5).mean(axis = tuple(range(self.dim - 1)))
-                omega_BV[:, i] = ( 1 / cs2 * IDL_derivative( radius, pgas ) - IDL_derivative( radius, rho )) * IDL_derivative( radius, phi ) / rho
-        return time - self.time_of_bounce_rho(), radius, omega_BV 
-
-    #derivatives
-    def velocity_radial_derivative(self, data_h5):
-        radius = self.cell.radius(self.ghost)
-        velocity = self.radial_velocity(data_h5)
-        return IDL_derivative(radius, velocity) * radius / velocity
-
-    def entropy_radial_derivative(self, data_h5):
-        radius = self.cell.radius(self.ghost)
-        entropy = self.entropy(data_h5)
-        return IDL_derivative(radius, entropy) * radius / entropy
+        dV = self.cell.dVolume_integration(self.ghost)
+        file_list = self.file_list_hdf()
+        PNS_radius, indices, time, gh = self.get_PNS_radius(PNS_radius=True, indices=True, 
+                                                            ret_time=True, ghost_cells=True)
+        while radius.ndim != dV.ndim:
+            radius = radius[None, ...]
+        angular_momentum = np.zeros((len(time), 5))
+        angular_momentum[:, 0] = time
+        for (i, f) in zip(indices, file_list):
+            data = self.open_h5(f)
+            rho = np.where(radius <= self.ghost.remove_ghost_cells_radii(PNS_radius[..., i], self.dim, **gh)[..., None],
+                           self.rho(data), 0) * dV * radius
+            vr = self.radial_velocity(data)
+            vtheta = self.theta_velocity(data)
+            vphi = self.phi_velocity(data)
+            angular_momentum[i, 1:-1] = np.array([(rho * vr).sum(), (rho * vtheta).sum(), (rho * vphi).sum()])
+        angular_momentum[:,-1] = np.sqrt(angular_momentum[:,1] ** 2 + angular_momentum[:,2] ** 2 + angular_momentum[:,3] ** 2)
+        return angular_momentum
+            
     
-    def omega_radial_derivative(self, data_h5):
-        omega = self.omega(data_h5)
-        radius = self.cell.radius(self.ghost)
-        return IDL_derivative(radius, omega)
-    
+
+    ##---------------------------------------------------------------------------------------
+    ## Radii
+    ##---------------------------------------------------------------------------------------
+
+    ## INNER CORE
+
     def innercore_radius_single(self, data_h5):
         """
         We define the inner core of a star as the region in sonic contact with the
@@ -1002,7 +1053,9 @@ class SimulationAnalysis:
             self.innercore_radius(tob_corrected, t_l = g, t_r = g, p_l = g, p_r = g)
         return self.__get_radii(innercore_file, innercore_radius, indices, min_max_average,
                                 ret_time, ghost_cells, tob_corrected)
-       
+    
+    ## PNS
+
     def PNS_radius_single(self, data_h5):
         """
         A bit empirical but should work fine. We consider everything with
@@ -1028,7 +1081,43 @@ class SimulationAnalysis:
             self.PNS_radius(tob_corrected, t_l = g, t_r = g, p_l = g, p_r = g)
         return self.__get_radii(PNS_file, PNS_radius, indices, min_max_average,
                                 ret_time, ghost_cells, tob_corrected)
- 
+    
+    ## CONVECTION
+
+    def convective_radius_single(self, data_h5):
+        """
+        This is a very rough approximation. We take as beginning of the convective
+        region inside the PNS the point in which the Ye is minimum. If this point does not exists
+        below 30 km we take 5x10^{12} g/cm³ as threshold. 
+        """
+        radius = self.cell.radius(self.ghost)
+        rad_30km = np.argmax(radius >= u.convert_to_cm(30))
+        rho = self.rho(data_h5)
+        rho_5e12 = np.argmax(rho <= 5e12, axis = -1)
+        Ye = self.Ye(data_h5)
+        minYe = np.argmax(Ye[..., :rad_30km], axis=-1)
+        dYedr = IDL_derivative(radius, Ye)
+        mask =  (dYedr[np.arange(len(minYe)), minYe-1] < 0) & (dYedr[np.arange(len(minYe)), minYe+1] > 0)
+        minYe = np.where(mask, minYe, rho_5e12)
+        return radius[minYe]
+    
+    def convective_radius(self, tob_correction, save_name = 'convective_radius', **kwargs):
+        self.__save_radii('convective', tob_correction, save_name, **kwargs)
+
+    def get_convective_radius(self, convective_radius = False, indices = False, min_max_average = False,
+                                ret_time = False, ghost_cells = False, tob_corrected = True):
+        convective_file = os.path.join(self.storage_path,'convective_radius.h5')
+        if not os.path.exists(convective_file):
+            warnings.warn("Convective radius file not found. Creating one with default settings.\n" + \
+                          "If different settings are needed please refer to the " + \
+                          "\"convective_radius(...)\" method")
+            g = self.ghost_cells - 1
+            self.convective_radius(tob_corrected, t_l = g, t_r = g, p_l = g, p_r = g)
+        return self.__get_radii(convective_file, convective_radius, indices, min_max_average,
+                                ret_time, ghost_cells, tob_corrected)
+    
+    ## GAIN
+
     def gain_radius_single(self, data_h5, PNS_radius):
         """
         We find the gain radius as the region outside the PNS where neutrino
@@ -1058,6 +1147,7 @@ class SimulationAnalysis:
         return self.__get_radii(gain_file, gain_radius, indices, min_max_average,
                                 ret_time, ghost_cells, tob_corrected)
 
+    ## NEUTRINO SPHERES
     def neutrino_sphere_radius_single(self, data_h5):
         """
         To calculate neutrino sphere we consider:
@@ -1151,6 +1241,8 @@ class SimulationAnalysis:
             return None
         return quantities_to_return
 
+    ## SHOCK
+
     def shock_radius_single(self, data_h5, zero = False):
         """
         This method to calculate the shock propagation is still under development, however
@@ -1172,9 +1264,10 @@ class SimulationAnalysis:
         if zero:
             return np.zeros(velocity.shape[:-1])
         r = self.cell.radius(self.ghost)
-        velocity_derivative = np.flip(self.velocity_radial_derivative(data_h5), axis = -1)
+        velocity_derivative = np.flip(IDL_derivative(r, self.radial_velocity(data_h5)) * \
+                                      r / self.radial_velocity(data_h5), axis = -1)
         entropy = np.flip(self.entropy(data_h5), axis = -1)
-        entropy_derivative = np.flip(self.entropy_radial_derivative(data_h5), axis = -1)
+        entropy_derivative = np.flip(IDL_derivative(r, entropy) * r / entropy, axis = -1)
         #thresholds
         vel_der_tresh = -1.5
         vel_tresh = -3e9
@@ -1236,13 +1329,16 @@ class SimulationAnalysis:
         return self.__get_radii(shock_file, shock_radius, indices, min_max_average,
                                 ret_time, ghost_cells, tob_corrected)
 
+    ## MISCELLANEA
+
     def __save_radii(self, radius_to_calculate: Literal['PNS', 'gain', 'shock', 'neutrino', 'innercore'], tob_correction, 
                 save_name, **kwargs):
         methods = {'PNS': self.PNS_radius_single,
                    'gain': self.gain_radius_single,
                    'neutrino': self.neutrino_sphere_radius_single, 
                    'shock': self.shock_radius_single,
-                   'innercore': self.innercore_radius_single}
+                   'innercore': self.innercore_radius_single,
+                   'convective': self.convective_radius_single}
         save_path = check_path(self.storage_path, save_name)
         self.ghost.update_ghost_cells(**kwargs)
         file_list = self.file_list_hdf()
@@ -1258,7 +1354,15 @@ class SimulationAnalysis:
         for (f, i) in zip(file_list, indices):
             no_neutrino_error = False #in some simulations neutrino output is not saved 
                                       #for all timesteps to save storage space
-            data_h5 = self.open_h5(f)
+            
+            try:
+                data_h5 = self.open_h5(f)
+            except:
+                data[i, :] = data[i-1, :]
+                radius_single = rad_out[..., i-1]
+                rad_out = np.concatenate((rad_out, radius_single[..., None]),
+                                        axis = -1)
+                continue
             data[i, 0] = self.time(data_h5)
             if radius_to_calculate == 'gain':
                 radius_single = calculate_radius(data_h5, PNS_radius[..., i])
@@ -1607,7 +1711,7 @@ class SimulationAnalysis:
 
     def __B_growth(self, data_h5):
         return self.magnetic_field(data_h5)[..., 0] * \
-               self.omega_radial_derivative(data_h5) * \
+               IDL_derivative(self.cell.radius(self.ghost), self.omega(data_h5)) * \
                self.cell.radius(self.ghost)
 
     def __growth(self):
@@ -1637,9 +1741,8 @@ class SimulationAnalysis:
 
 #rho decomposition
     def pns_rho_decomposition(self):
-        PNS_radius, indices, \
-        time, ghost_cells =  self.get_PNS_radius(PNS_radius = True,indices = True, 
-                                                 ret_time = True, ghost_cells = True,)
+        indices, time =  self.get_PNS_radius(indices = True, 
+                                                 ret_time = True)
         data_out = np.zeros((time.shape[0], 3))
         data_out[:, 0] = time
         dtheta = self.cell.dtheta_integration(self.ghost)
