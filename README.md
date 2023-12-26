@@ -2,13 +2,13 @@
 
 ## Introduction
 
-This my version of a data analysis tool for the code AENUS-ALCARR. It is a _easy-to-use_ package built entirely in `Python`, and it is meant to work alongside with the _soon to be release_ __scivis__ (a tool for visualizing supernovae data from simulations made withthe same code), but works also standalone. All features are implemented, tested and work fairly well for 1D and 2D simulations, while I did not test them in 3D. However, _most_ of them should work also in 3D.<br/>
+This my version of a data analysis tool for the code AENUS-ALCARR. It is a _easy-to-use_ package built entirely in `Python`. It's use is mainly to extract thermodynamics and hydrodynamics data from the simulations and use them to compute crucial core-collapse supernova analysis quantities such as radii (shock, neutrinos, PNS, ...), gravitational waves, enregies and much more.  All features are implemented, tested and work fairly well for 1D and 2D simulations, while I did not test them in 3D. However, _most_ of them should work also in 3D.<br/>
 Please bear in mind that this package will be updated fairly often, so refer always to the latest version.<br/>
 Any tips or suggestion are more than welcome! 
 
 ## Requirements
 
-This being a `Python` package, it requires a version of [Python3](https://www.python.org/) installed on your computer. Besides, it makes heavy use of three `Python` libraries
+This being a `Python` package, it requires a version of [Python3](https://www.python.org/) installed on your computer. Besides, it makes heavy use of five `Python` libraries
  - [NumPy](https://numpy.org/)
  - [SciPy](https://scipy.org/)
  - [h5Py](https://www.h5py.org/)
@@ -19,34 +19,20 @@ To install their latest version just run
 ```
 pip install -r requirements.txt
 ```
-inside the `scidata` folder.
+inside the package folder.
 
 ## Installation
-To install this package just clone 
+To install this package just clone it
 ```
 git clone https://github.com/MarcoCusinato/scidata.git
 ```
-or download and unzip it into your Python3 `site-packages` folder, that is usually located in
-- Windows:
+then navigate to the package folder and run install it with `pip`
 ```
-C:/Users/<USER>/AppData/Roaming/Python/Python3X/site-packages
+cd scidata
+pip install .
 ```
-- Linux server:
-```
-/home/<USER>/.local/lib/python3.X/site-packages
-```
-- Anaconda environment:
-```
-/home/<USER>/anaconda3/envs/<env_name>/lib/python3.X/site-packages/
-or
-/home/<USER>/.conda/envs/<env_name>/lib/python3.X/site-packages/
-```
-where X is the `Python` version for which you would like to install `scidata`.<br/>
-Finally, navigate to the `scidata` folder and 
-```
-pip install requirements.txt
-```
-Congrats you have successfully installed `scidata`!!!
+Congrats you have successfully installed `scidata`! <br/>
+The first time you will import it, it will create a local storage folder called `Simulation_analysis_quantities`, if it does not already exist, in your home directory (Linux) or Desktop (Windows) to store some quantities that are numerically expensive to calculate.  Additionally, inside the scidata package will be created a dictionary to store the simulation path, and a symlink to the package will be added to the Desktop or home directory depending on the platform you are working on.<br/>
 
 ## Getting started
 
@@ -111,7 +97,7 @@ averaged_pns_radius = sim.get_PNS_radius(PNS_radius = False, indices = False, mi
 ```
 By plotting it you will get something like [this plot]()
 
-Similarly you can get other quantities and derive many useful stuff by using other `SimulationAnalys` methods. Please refer to its methods description (when avaiable) to find the ones you need.
+Similarly you can get other quantities and derive many useful stuff by using other `SimulationAnalysis` methods. Please refer to its methods description (when avaiable) to find the ones you need.
 
 ## Future developments
 Probably what I will need to use at the moment :)
