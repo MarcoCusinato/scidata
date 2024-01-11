@@ -34,8 +34,8 @@ def get_indices_from_parfile(file_name, path_folder):
         indices['hydro']['I_VZ'] = namelist["IINDICES"]["I_VZ"] - 1
     if 'I_YE'in namelist["IINDICES"]:
         indices['hydro']['I_YE'] = namelist["IINDICES"]["I_YE"] - 1
-    if 'I_YZ'in namelist["IINDICES"]:
-        indices['hydro']['I_YZ'] = namelist["IINDICES"]["I_YZ"] - 1
+    if 'I_YN'in namelist["IINDICES"]:
+        indices['hydro']['I_YN'] = namelist["IINDICES"]["I_YN"] - 1
     if 'I_EOSERR'in namelist["IINDICES"]:
         indices['thd']['I_EOSERR'] = namelist["IINDICES"]["I_EOSERR"] - 1
     if 'I_LRTZ'in namelist["IINDICES"]:
