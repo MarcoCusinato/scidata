@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This my version of a data analysis tool for the code AENUS-ALCARR. It is a _easy-to-use_ package built entirely in `Python`. It's use is mainly to extract thermodynamics and hydrodynamics data from the simulations and use them to compute crucial core-collapse supernova analysis quantities such as radii (shock, neutrinos, PNS, ...), gravitational waves, enregies and much more.  All features are implemented, tested and work fairly well for 1D and 2D simulations, while I did not test them in 3D. However, _most_ of them should work also in 3D.<br/>
+This my version of a data analysis tool for the code AENUS-ALCAR. It is a _easy-to-use_ package built entirely in `Python`. It's use is mainly to extract thermodynamics and hydrodynamics data from the simulations and use them to compute crucial core-collapse supernova analysis quantities such as radii (shock, neutrinos, PNS, ...), gravitational waves, energies and much more.  All features are implemented, tested and work fairly well for 1D and 2D simulations, while I did not test them in 3D. However, _most_ of them should work also in 3D.<br/>
 Please bear in mind that this package will be updated fairly often, so refer always to the latest version.<br/>
 Any tips or suggestion are more than welcome! 
 
